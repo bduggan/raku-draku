@@ -1,0 +1,24 @@
+#!raku
+
+use Draku::Render;
+use Test;
+
+my $h = Pod::Heading.new(level => 3, config => {}, contents => [
+    Pod::Block::Para.new(config => {}, contents => [
+       Pod::FormattingCode.new(type => "X", meta => [
+          [ "regex", "\\h"],
+          [ "regex", "\\H"]
+        ], config => {}, contents => [
+          Pod::FormattingCode.new(type => "C", meta => [], config => {}, contents => [ "\\h"]),
+          " and ",
+          Pod::FormattingCode.new(type => "C", meta => [], config => {}, contents => [ "\\H"])
+      ])
+  ])
+]);
+
+my $out = render($h, :plain);
+
+is $out, ' ─ \\h  and  \\H ─', 'nested heading, para, formatting code';
+
+done-testing;
+

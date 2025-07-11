@@ -1,0 +1,31 @@
+{
+  "authors" : [
+    "Brian Duggan"
+  ],
+  "build-depends" : [ ],
+  "depends" : [
+    "Pod::To::Raku",
+    "Color::Scheme",
+    "Terminal::UI",
+    "git://github.com/jkramer/p6-Text-Wrap.git",
+    "Pretty::Table",
+    "Color::Names",
+    "Cache::Dir"
+  ],
+  "description" : "A documentation browser for Raku",
+  "license" : "MIT",
+  "name" : "App::draku",
+  "perl" : "6.*",
+  "provides" : {
+    "draku" : "script/draku",
+    "Draku::Search" : "lib/Draku/Search.rakumod",
+    "Draku::UI" : "lib/Draku/UI.rakumod",
+    "Draku::Extract" : "lib/Draku/Extract.rakumod",
+    "Draku::Render" : "lib/Draku/Render.rakumod"
+  },
+  "resources" : [ ],
+  "source-url" : "",
+  "tags" : [ ],
+  "test-depends" : [ ],
+  "version" : "0.0.1"
+}

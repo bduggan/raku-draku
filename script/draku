@@ -1,0 +1,145 @@
+#!/usr/bin/env raku
+
+use Terminal::UI 'ui';
+use Terminal::ANSI::OO 't';
+use Log::Async;
+
+use Draku::Render;
+use Draku::UI;
+use Draku::Search;
+
+my %*SUB-MAIN-OPTS = :named-anywhere, ;
+my $*debug-pod;
+my Str $*search-term = Nil;
+
+my \top = my $;
+my \btm = my $;
+
+sub setup {
+  ui.setup: heights => [ fr => 1, 5 ];
+  (top,btm) = ui.panes;
+  top.auto-scroll = False;
+  btm.auto-scroll = False;
+  set-actions(ui,top,btm);
+  return \top, \btm;
+}
+
+multi MAIN('search', Str $term, Bool :$debug, Bool :$all, Int :$max = 1000) {
+  setup;
+  $*search-term = $term;
+  my @results = search($term, :$all, :$max);
+  exit note "No documentation found for $term" unless @results > 0;
+
+  my $found = @results[0]<file>;
+  render-file(top, $found);
+  for top.meta.kv -> $k, $m {
+    next unless $m<pod_heading>;
+    next unless top.lines[$k].contains($term);
+    btm.put: "** " ~ top.lines[$k], meta => %( file => $found, line => $k, text => top.lines[$k] );
+  }
+
+  for @results {
+    btm.put: [
+      t.color(brightturquoise) => .<file>.basename.fmt('%-20s '),
+      t.color(carolinablue) => .<line>.fmt('%4d '),
+      t.white => .<text>
+    ], meta => %$_;
+  }
+
+  jump-to-term(top, @results[0]<line>, @results[0]<text>);
+  ui.interact;
+  ui.shutdown;
+}
+
+multi MAIN($module) {
+  my @found;
+  my @repos = $*REPO.repo-chain.grep(CompUnit::Repository::Installation);
+  for @repos -> $repo {
+    my @installed = $repo.installed.grep(*.defined);
+    for @installed {
+      with .meta<provides>{ $module } {
+        @found.push: %( :repo($repo), :module($_) );
+      }
+    }
+  }
+  setup;
+  my $file;
+  for @found -> $f {
+    $file //= $f<repo>.source-file('sources').child( $f<module>[0].values[0]<file>);
+    btm.put: "Installation { $f<repo>.short-id }";
+    for $f<repo>.candidates($module) -> $c {
+      btm.put: [ t.green => "Version {$c.meta<ver>}", t.cyan => " Auth: { $c.meta<auth> }" ];
+      btm.put: [ t.green => "Description: { $c.meta<description> }" ];
+      btm.put: [ t.white => "Provides:" ];
+      for $c.meta<provides>.keys.sort -> $p {
+        my %m = $c.meta<provides>{$p};
+        for %m.kv -> $k, $v {
+          my $file = $c.content($k).path;
+          btm.put: [ t.yellow => "* $p", t.cyan => " { $k }" ], meta => %( :$file );
+        }
+      }
+    }
+  }
+  btm.on: select => {
+    with %:meta<file> -> $file {
+      render-file(top, $file);
+    }
+    with %meta<line> -> $line { 
+      ui.alert("jumping to $line");
+      my $text = %meta<text> // '';
+      jump-to-term(top, $line, $text);
+    }
+  }
+  ui.interact;
+  ui.shutdown;
+}
+
+multi MAIN(
+  Bool :$update #= update the core documentation
+) {
+  my $*core-docs = core-docs(:$update);
+  my %*dirs-shown;
+  setup;
+  my sub welcome {
+    top.splash: @(
+        [ t.color(yellow)    => "Welcome to Draku!" ],
+        [ t.color(limegreen) => "Documentation for Raku" ],
+        '',
+        [ t.color(lilac) => "press h for a list of keys"],
+    );
+    btm.clear;
+    btm.put: [t.yellow => "core docs" ], meta => %(:dir(core-docs));
+    show-repos(btm);
+    ui.focus(pane => 1);
+  }
+  welcome;
+
+  ui.bind: 'r' => 'restart';
+  ui.on: restart => {
+    top.clear;
+    welcome;
+  }
+
+  ui.interact;
+  ui.shutdown;
+}
+
+sub show-repos(\pane, :repo($selected) = Nil) {
+  my @repos = $*REPO.repo-chain.grep(CompUnit::Repository::Installation);
+  my $i = 0;
+  my $line = 0;
+  for @repos -> $repo {
+    my @installed = $repo.installed.grep(*.defined);
+    my $color = t.white;
+    if $selected && $selected === $repo {
+      $color = t.yellow;
+      $line = $i;
+    }
+    pane.put: [
+      $color => "--> $repo",
+      t.cyan => " ({@installed.elems} dists)",
+    ], meta => %( :$repo );
+    $i++;
+  }
+  pane.select($line);
+}
