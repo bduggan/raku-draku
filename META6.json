@@ -2,6 +2,7 @@
   "authors" : [
     "Brian Duggan"
   ],
+  "auth" : "zef:bduggan",
   "build-depends" : [ ],
   "depends" : [
     "JSON::Fast",
@@ -26,8 +27,8 @@
     "Draku::Render" : "lib/Draku/Render.rakumod",
     "Draku::Conf" : "lib/Draku/Conf.rakumod"
   },
+  "source-url" : "git://github.com/bduggan/raku-draku.git",
   "resources" : [ ],
-  "source-url" : "",
   "tags" : [ ],
   "test-depends" : [ ],
   "version" : "0.0.1"
