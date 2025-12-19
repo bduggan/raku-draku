@@ -33,13 +33,15 @@ sub browse-docs(\pane, :%meta) is export {
 
  with %meta<pod> -> $pod {
    my @opts = links($pod).map: { .<name> => .<target> };
-   with ui.select("Choose a link", @opts.map(*.key), @opts.map({.value // .key}), :cancel) -> $chosen {
-     with find($chosen) -> $found {
-       pane.clear;
-       render-file(pane, $found);
-       ui.refresh;
-     } else {
-       ui.alert("couldn't find $chosen");
+   if @opts {
+     with ui.select("Choose a link", @opts.map(*.key), @opts.map({.value // .key}), :cancel) -> $chosen {
+       with find($chosen) -> $found {
+         pane.clear;
+         render-file(pane, $found);
+         ui.refresh;
+       } else {
+         ui.alert("couldn't find $chosen");
+       }
      }
    }
  }
