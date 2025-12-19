@@ -24,6 +24,8 @@ It also greps through the core documentation.
 
 Data is stored in ~/.config/draku or the equivalent if XDG_CONFIG_HOME is set.
 
+L<Screenshots!|https://github.com/bduggan/raku-draku/wiki/screenshots>
+
 =head1 TODO
 
 More documentation!
