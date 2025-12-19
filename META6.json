@@ -17,7 +17,7 @@
   "name" : "Draku",
   "perl" : "6.*",
   "provides" : {
-    "draku" : "script/draku",
+    "draku" : "bin/draku",
     "Draku" : "lib/Draku.rakumod",
     "Draku::Search" : "lib/Draku/Search.rakumod",
     "Draku::UI" : "lib/Draku/UI.rakumod",
