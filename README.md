@@ -9,8 +9,11 @@ Draku -- Documentation viewer for Raku
 SYNOPSIS
 ========
 
+    # Browse installed modules and core docs
+    draku
+
     # View inline documentation for a module
-    draku AI::Gator
+    draku Color
 
     # Search the core docs for a phrase
     draku search List
