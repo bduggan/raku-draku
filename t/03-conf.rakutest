@@ -1,0 +1,10 @@
+#!raku
+
+use Test;
+use Draku::Conf;
+
+plan 3;
+
+ok $cache-dir.defined, 'cache-dir is defined';
+ok $pod-dir.defined, 'pod-dir is defined';
+ok $pod-tmp.defined, 'pod-tmp is defined';

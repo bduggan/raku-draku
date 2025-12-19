@@ -1,4 +1,4 @@
-unit module Doku::Render;
+unit module Draku::Render;
 use Terminal::ANSI::OO 't';
 use Color::Scheme;
 use Pretty::Table;
@@ -188,7 +188,7 @@ sub extract-pod(IO::Path $file) is export {
   }
 }
 
-sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DOKU_DEBUG>) is export {
+sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DRAKU_DEBUG>) is export {
   $file.e or die "$file not found";
   pane.clear;
   pane.put: [t.color('#444444') => "rendering $file..."], wrap => 'hard';

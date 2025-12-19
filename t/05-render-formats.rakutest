@@ -1,0 +1,28 @@
+#!raku
+
+use Test;
+use Draku::Render;
+
+plan 5;
+
+# Test rendering formatting codes
+my $code-c = Pod::FormattingCode.new(type => 'C', contents => ['code']);
+my $result-c = render($code-c, :plain);
+is $result-c, 'code', 'C formatting code rendered';
+
+my $code-b = Pod::FormattingCode.new(type => 'B', contents => ['bold']);
+my $result-b = render($code-b, :plain);
+is $result-b, 'bold', 'B formatting code rendered';
+
+my $code-i = Pod::FormattingCode.new(type => 'I', contents => ['italic']);
+my $result-i = render($code-i, :plain);
+is $result-i, 'italic', 'I formatting code rendered';
+
+# Test string rendering
+my $str-result = render('plain text', :plain);
+is $str-result, 'plain text', 'plain string rendered';
+
+# Test paragraph rendering
+my $para = Pod::Block::Para.new(contents => ['test paragraph']);
+my $para-result = render($para, :plain);
+is $para-result[0], 'test paragraph', 'paragraph rendered';

@@ -1,0 +1,18 @@
+#!raku
+
+use Test;
+use Draku::Extract;
+
+plan 3;
+
+# Test links extraction from Pod::FormattingCode with type 'L'
+my $link-pod = Pod::FormattingCode.new(
+  type => 'L',
+  meta => 'https://raku.org',
+  contents => ['Raku Website']
+);
+
+my @links = links($link-pod);
+is @links.elems, 1, 'extracted one link';
+is @links[0]<name>, 'Raku Website', 'link name is correct';
+is @links[0]<target>, 'https://raku.org', 'link target is correct';
