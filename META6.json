@@ -14,10 +14,11 @@
   ],
   "description" : "A documentation browser for Raku",
   "license" : "MIT",
-  "name" : "App::draku",
+  "name" : "Draku",
   "perl" : "6.*",
   "provides" : {
     "draku" : "script/draku",
+    "Draku" : "lib/Draku.rakumod",
     "Draku::Search" : "lib/Draku/Search.rakumod",
     "Draku::UI" : "lib/Draku/UI.rakumod",
     "Draku::Extract" : "lib/Draku/Extract.rakumod",
