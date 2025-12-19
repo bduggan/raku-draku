@@ -81,6 +81,11 @@ multi MAIN($module) {
       }
     }
   }
+  top.put: "Please choose a module from below.";
+  top.put: "Press [tab] to switch focus between panes.";
+  top.put: "Press [enter] to select.";
+  top.put: "Press [j] and [k] to move up and down.";
+
   btm.on: select => {
     with %:meta<file> -> $file {
       render-file(top, $file);
