@@ -25,6 +25,7 @@ sub setup {
 }
 
 multi MAIN('search', Str $term, Bool :$debug, Bool :$all, Int :$max = 1000) {
+  my $*core-docs = core-docs(:!update);
   setup;
   $*search-term = $term;
   my @results = search($term, :$all, :$max);

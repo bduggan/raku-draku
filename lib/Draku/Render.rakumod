@@ -4,14 +4,15 @@ use Color::Scheme;
 use Pretty::Table;
 use Log::Async;
 use Cache::Dir;
+use Draku::Conf;
 
 my $*debug-pod;
 my $color = Color.new('#54DD30');
 my @palette = color-scheme( $color, 'analogous'); #six-tone-ccw');
 my $heading = Color.new('#FFFE37');
-my $cache = Cache::Dir.new: dir => $*HOME.child('.doku-cache');
-mkdir $*HOME.child('.doku-pod');
-my $pod-tmp = $*HOME.child('.doku-pod').child('out.pod');
+
+
+my $cache = Cache::Dir.new: dir => $cache-dir;
 
 our %COLORS is export is default(t.white) =
   title     => t.color('#ffff00'),

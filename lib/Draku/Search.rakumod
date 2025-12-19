@@ -1,4 +1,5 @@
 unit module Draku::Search;
+use Draku::Conf;
 
 sub search($term, Bool :$all, Int :$max) is export {
   my $file = $term.split('::').join('/') ~ '.pod6';
@@ -40,7 +41,6 @@ sub search($term, Bool :$all, Int :$max) is export {
   return @results.sort( { [~.<file>, +.<line> ] } ).head($max);
 }
 
-my $cache-dir = $*HOME.child('.doku-cache');
 sub core-docs(Bool :$update) is export {
   mkdir $cache-dir unless $cache-dir.d;
   unless $cache-dir.child('doc').d {
