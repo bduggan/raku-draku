@@ -4,6 +4,7 @@
   ],
   "build-depends" : [ ],
   "depends" : [
+    "JSON::Fast",
     "Pod::To::Raku",
     "Color::Scheme",
     "Terminal::UI",
