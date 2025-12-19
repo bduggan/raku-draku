@@ -1,0 +1,7 @@
+#!raku
+
+use Test;
+plan 2;
+
+use-ok 'Draku';
+use-ok 'Draku::Render';
