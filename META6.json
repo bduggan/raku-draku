@@ -21,7 +21,8 @@
     "Draku::Search" : "lib/Draku/Search.rakumod",
     "Draku::UI" : "lib/Draku/UI.rakumod",
     "Draku::Extract" : "lib/Draku/Extract.rakumod",
-    "Draku::Render" : "lib/Draku/Render.rakumod"
+    "Draku::Render" : "lib/Draku/Render.rakumod",
+    "Draku::Conf" : "lib/Draku/Conf.rakumod"
   },
   "resources" : [ ],
   "source-url" : "",

@@ -1,0 +1,35 @@
+unit class Draku;
+
+=begin pod
+
+=head1 NAME
+
+Draku -- Documentation viewer for Raku
+
+=head1 SYNOPSIS
+
+  # View inline documentation for a module
+  draku AI::Gator
+
+  # Search the core docs for a phrase
+  draku search List
+
+=head1 DESCRIPTION
+
+This is a system for viewing raku pod in a terminal console.
+
+It finds modules and extracts inline documentation.
+
+It also greps through the core documentation.
+
+Data is stored in ~/.config/draku or the equivalent if XDG_CONFIG_HOME is set.
+
+=head1 TODO
+
+More documentation!
+
+=head1 AUTHOR
+
+Brian Duggan
+
+=end pod
