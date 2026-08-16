@@ -122,6 +122,67 @@ sub strip-formatting-codes(Str $s) is export {
   $s.subst: /<[A..Z]> '<' (.*?) '>'/, -> $/ { ~$0 }, :g
 }
 
+#| Rakudo's Pod grammar does not parse inline formatting codes (C<>, B<>,
+#| L<>, etc.) within =defn bodies -- they arrive as raw, unparsed text.
+#| This does a small, single-pass reparse of that text into colored pieces
+#| suitable for pane.put(:wrap<word>), recursing one level to handle labels
+#| like L<C<=code>|#Code blocks>.
+sub inline-pod-pieces(Str $text --> List) is export {
+  my @pieces;
+  my $buf = '';
+  my $pos = 0;
+  my $len = $text.chars;
+  while $pos < $len {
+    my $ch = $text.substr($pos, 1);
+    if $ch ~~ /<[A..Z]>/ && $pos + 1 < $len && $text.substr($pos + 1, 1) eq '<' {
+      my $start = $pos + 2;
+      my $i = $start;
+      my $depth = 1;
+      while $i < $len && $depth > 0 {
+        given $text.substr($i, 1) {
+          when '<' { $depth++ }
+          when '>' { $depth-- }
+        }
+        $i++;
+      }
+      if $depth == 0 {
+        my $inner = $text.substr($start, $i - $start - 1);
+        if $buf.chars { @pieces.push: $buf; $buf = ''; }
+        given $ch {
+          when 'L' {
+            my ($label, $target) = $inner.split('|', 2);
+            my $label-text = inline-pod-pieces($label // $target).map({ $_ ~~ Pair ?? $_.value !! $_ }).join('');
+            @pieces.push: %COLORS<link> => $label-text;
+          }
+          when 'C' | 'B' | 'I' | 'R' | 'X' | 'E' | 'N' {
+            @pieces.push: %COLORS{"format_$ch"} => $inner;
+          }
+          default {
+            @pieces.push: $inner;
+          }
+        }
+        $pos = $i;
+        next;
+      }
+    }
+    $buf ~= $ch;
+    $pos++;
+  }
+  @pieces.push: $buf if $buf.chars;
+  @pieces;
+}
+
+#| Splits raw =defn body text around literal "=begin NAME" / "=end NAME"
+#| markers (also unparsed by Rakudo when nested inside a =defn) so that
+#| example blocks embedded in the flattened text are set apart from the
+#| surrounding prose, rather than blending into one giant word-wrapped
+#| paragraph. Original line breaks within those examples are already lost
+#| upstream, so this can only isolate the markers, not restore layout.
+sub defn-segments(Str $text --> List) is export {
+  my $marked = $text.subst: / '=' ['begin' | 'end'] \s+ \S+ /, { "\0" ~ $/ ~ "\0" }, :g;
+  $marked.split("\0").map(*.trim).grep(*.chars).List;
+}
+
 multi render(\pane, Pod::Defn $pod) is export {
   debug-pod(pane, $pod);
   my $term = strip-formatting-codes($pod.term);
@@ -129,14 +190,25 @@ multi render(\pane, Pod::Defn $pod) is export {
   pane.put: [ %COLORS<item_1> => $term ];
   for $pod.contents -> $c {
     next unless $c ~~ Pod::Block::Para && $c.contents;
-    my @pieces = render-glued-pieces($c.contents);
-    pane.put: [ '    ', |@pieces ], :wrap<word>, meta => :$pod;
+    for $c.contents -> $item {
+      if $item ~~ Str {
+        for defn-segments($item) -> $seg {
+          if $seg ~~ /^ '=' ['begin' | 'end'] \s+ / {
+            pane.put: [ '    ', %COLORS<code> => $seg ];
+          } else {
+            pane.put: [ '    ', |inline-pod-pieces($seg) ], :wrap<word>, meta => :$pod;
+          }
+        }
+      } else {
+        pane.put: [ '    ', render($item) ], :wrap<word>, meta => :$pod;
+      }
+    }
   }
 }
 
 multi render(Pod::Defn $pod, Bool :$plain) is export {
   my $term = strip-formatting-codes($pod.term);
-  my $body = $pod.contents.map({ render($_, :plain) }).join(' ');
+  my $body = $pod.contents.map({ $_ ~~ Str ?? $_ !! render($_, :plain) }).join(' ');
   return "$term $body" if $plain;
   %COLORS<item_1> => "$term $body"
 }
