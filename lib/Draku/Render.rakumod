@@ -169,7 +169,8 @@ sub inline-pod-pieces(Str $text --> List) is export {
             @pieces.push: %COLORS<link> => $label-text if $label-text.chars;
           }
           when 'C' | 'B' | 'I' | 'R' | 'X' | 'E' | 'N' {
-            @pieces.push: %COLORS{"format_$ch"} => $inner if $inner.chars;
+            my $outer-color = %COLORS{"format_$ch"};
+            @pieces.push: |inline-pod-pieces($inner).map({ $_ ~~ Pair ?? $_ !! ($outer-color => $_) });
           }
           default {
             push-plain($inner);
@@ -218,10 +219,18 @@ sub defn-body-lines(Str $text --> List) is export {
   }
   my sub flush-buf {
     return unless $buf.chars;
-    for $buf.split(/ '=' ['begin' | 'end'] \s+ \S+ /, :v) -> $part {
+    # A marker also swallows any trailing :config<...> options (eg. the
+    # :allow<B V> on "=begin code :allow<B V>") so they don't leak out as
+    # visible prose on the following line -- only the bare "=begin NAME" /
+    # "=end NAME" head is kept for display.
+    for $buf.split(
+      / $<head>=('=' ['begin' | 'end'] \s+ \S+)
+        [ \s+ ':' '!'? \w+ [ '<' <-[<>]>* '>' | '(' <-[()]>* ')' | '{' <-[{}]>* '}' ]? ]* /,
+      :v
+    ) -> $part {
       if $part ~~ Match {
         flush-pieces;
-        @lines.push: (marker => $part.Str);
+        @lines.push: (marker => $part<head>.Str);
       } else {
         push-plain-piece($part.Str);
       }
@@ -232,6 +241,17 @@ sub defn-body-lines(Str $text --> List) is export {
     return unless $text.chars;
     flush-buf;
     @pieces.push: $color.defined ?? ($color => $text) !! $text;
+  }
+  #| Recursively reparse a formatting code's inner text for further nested
+  #| codes (eg. the I<> inside B<I< Warning ... >>), instead of dumping it
+  #| as one opaque, uncolored, unstripped blob. Plain stretches take the
+  #| outer color; a nested code's own color wins over it.
+  my sub push-nested-code-piece($outer-color, Str $text) {
+    return unless $text.chars;
+    flush-buf;
+    for inline-pod-pieces($text) -> $ip {
+      @pieces.push: $ip ~~ Pair ?? $ip !! ($outer-color.defined ?? ($outer-color => $ip) !! $ip);
+    }
   }
 
   my $pos = 0;
@@ -258,7 +278,7 @@ sub defn-body-lines(Str $text --> List) is export {
             push-code-piece(%COLORS<link>, $label-text);
           }
           when 'C' | 'B' | 'I' | 'V' | 'R' | 'X' | 'E' | 'N' {
-            push-code-piece(%COLORS{"format_$ch"}, $inner);
+            push-nested-code-piece(%COLORS{"format_$ch"}, $inner);
           }
           default {
             flush-buf;
