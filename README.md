@@ -15,6 +15,9 @@ SYNOPSIS
     # View inline documentation for a module
     draku Color
 
+    # Get the docs from an ecosystem for a module
+    draku AccountableBagHash
+
     # Search the core docs for a phrase
     draku search List
 
@@ -26,6 +29,8 @@ This is a system for viewing raku pod in a terminal console.
 It finds modules and extracts inline documentation.
 
 It also greps through the core documentation.
+
+It will also look the ecosystems if a module is not installed locally.
 
 Data is stored in ~/.config/draku or the equivalent if XDG_CONFIG_HOME is set.
 
@@ -40,6 +45,8 @@ Things that are currently supported:
 * rendering pod in the console and scrolling through it
 
 * various pod elements: titles, subtitles, headings etc
+
+* ecosystems
 
 TODO
 ====
