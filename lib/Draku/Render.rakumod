@@ -371,14 +371,19 @@ multi render(Str $pod, Bool :$plain) is export {
 multi render(Pod::FormattingCode $pod, Bool :$plain) is export {
   # type, meta
   given $pod.type {
-    when 'C' | 'B' | 'I' | 'X' | 'R' | 'E' | 'N' {
+    when 'C' | 'B' | 'I' | 'X' | 'R' | 'E' | 'N' | 'D' | 'V' | 'K' | 'T' {
       return $pod.contents.map({render($_,:plain)}).join(' ') if $plain;
-      %COLORS{ "format_{ $pod.type }" } => $pod.contents.join(' ')
+      %COLORS{ "format_{ $pod.type }" } => $pod.contents.map({render($_,:plain)}).join(' ')
     }
-    when 'L' {
+    when 'L' | 'P' {
       # also has meta
       return $pod.contents.map({render($_, :plain )}).join(' ') if $plain;
       %COLORS<link> => $pod.contents.map({render($_, :plain )}).join(' ')
+    }
+    when 'Z' {
+      # zero-width: consumed by the parser, never rendered
+      return '' if $plain;
+      '' => ''
     }
     default {
       return "unknown : " ~ $pod.raku if $plain;
