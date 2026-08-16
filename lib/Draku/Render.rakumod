@@ -666,22 +666,290 @@ sub table-row(@cells) {
   @cells.map({ $_ ~~ Str ?? strip-formatting-codes($_) !! render($_, :plain) }).List
 }
 
-multi render(Pod::Block::Table $pod, Bool :$plain ) is export {
-  my $table = Pretty::Table.new;
-  if $pod.headers.elems > 0 {
-    $table.add-row(table-row($pod.headers))
+#| Raw =table blocks read straight from the source file, in document order,
+#| each with the raw body lines and the C<>-:allow list in effect at that
+#| point (from any preceding =config C<> :allow<...>). Rakudo's table
+#| parsing is fragile -- eg. a Z<> inside a C<> cell makes it collapse the
+#| whole table to one whitespace-squashed column -- so cells are recovered
+#| from the source instead. Regions inside =begin code examples are
+#| skipped so example tables don't shift the ordinals.
+sub extract-table-sources(IO::Path $file --> List) is export {
+  my @tables;
+  my @lines = try { $file.lines } // ();
+  my @allow;
+  my $i = 0;
+  while $i < @lines {
+    my $line = @lines[$i];
+    if $line ~~ /^ $<m>=(\s*) '=begin' \s+ 'code' >>/ {
+      my $m = $<m>.Str;
+      $i++;
+      $i++ while $i < @lines && @lines[$i] !~~ /^ $m '=end' \s+ 'code' >>/;
+      $i++ if $i < @lines;
+    }
+    elsif $line ~~ /^ \s* '=config' \s+ 'C<>' <-[<]>* ':allow<' $<l>=(<-[>]>*) '>' / {
+      @allow = $<l>.Str.words;
+      $i++;
+    }
+    elsif $line ~~ /^ $<m>=(\s*) '=begin' \s+ 'table' >> \s* $<conf>=(.*) $/ {
+      my $m = $<m>.Str;
+      my $conf = $<conf>.Str;
+      $i++;
+      my @body;
+      while $i < @lines && @lines[$i] !~~ /^ $m '=end' \s+ 'table' >>/ {
+        @body.push: @lines[$i];
+        $i++;
+      }
+      $i++ if $i < @lines;
+      @tables.push: %( lines => @body.List, config => $conf, allow => @allow.List );
+    }
+    elsif $line ~~ /^ \s* ['=for' \s+ 'table' | '=table'] >> \s* $<conf>=(.*) $/ {
+      my $conf = $<conf>.Str;
+      $i++;
+      my @body;
+      while $i < @lines && @lines[$i] ~~ /\S/ && @lines[$i] !~~ /^ \s* '=' \w/ {
+        @body.push: @lines[$i];
+        $i++;
+      }
+      @tables.push: %( lines => @body.List, config => $conf, allow => @allow.List );
+    }
+    else { $i++ }
   }
-  $pod.contents.map: { $table.add-row(table-row($_)) }
+  @tables.List;
+}
+
+#| Reduce a table cell's raw text to display text. Outside C<...> every
+#| formatting code is live: the wrapper is stripped (recursively), V<...>
+#| keeps its contents verbatim, and Z<...> vanishes. Inside C<...> (per
+#| S26) only the codes named by the active =config C<> :allow<...> are
+#| live; any other capital-letter+bracket sequence is literal text, though
+#| allowed codes nested further in are still honored. Handles both <...>
+#| and francophone «...» brackets.
+sub strip-cell-codes(Str $text, :@allow, Bool :$inside-code = False --> Str) is export {
+  my %close = '<' => '>', '«' => '»';
+  my $out = '';
+  my $pos = 0;
+  my $len = $text.chars;
+  while $pos < $len {
+    my $ch = $text.substr($pos, 1);
+    my $open = $pos + 1 < $len ?? $text.substr($pos + 1, 1) !! '';
+    if $ch ~~ /<[A..Z]>/ && (%close{$open}:exists) {
+      my $close = %close{$open};
+      my $i = $pos + 2;
+      my $depth = 1;
+      while $i < $len && $depth > 0 {
+        given $text.substr($i, 1) {
+          when $open  { $depth++ }
+          when $close { $depth-- }
+        }
+        $i++;
+      }
+      if $depth == 0 {
+        if $inside-code && $ch !(elem) @allow {
+          # not live here: emit the letter and bracket literally and keep
+          # scanning inside, so allowed codes nested within still resolve
+          $out ~= $ch ~ $open;
+          $pos += 2;
+          next;
+        }
+        my $inner = $text.substr($pos + 2, $i - ($pos + 2) - 1);
+        given $ch {
+          when 'Z' { }
+          when 'V' { $out ~= $inner }
+          when 'L' {
+            my ($label, $target) = $inner.split('|', 2);
+            $out ~= strip-cell-codes(($label // $target // ''), :@allow, :$inside-code);
+          }
+          when 'C' { $out ~= strip-cell-codes($inner, :@allow, :inside-code) }
+          default  { $out ~= strip-cell-codes($inner, :@allow, :$inside-code) }
+        }
+        $pos = $i;
+        next;
+      }
+    }
+    $out ~= $ch;
+    $pos++;
+  }
+  $out;
+}
+
+#| Parse a raw =table body per S26: rows are grouped by blank lines or
+#| horizontal separator lines (-, =, _, with optional + and |); a visible
+#| separator right after the first group marks it as the header row; a
+#| single unseparated group is one row per line. Columns are either
+#| whitespace-padded |/+ separators, or character columns that are blank
+#| in every content line (two or more wide -- the "double-space" rule),
+#| which also reassembles multi-line rows. Returns a Hash with <headers>
+#| (possibly empty) and <rows>, cells reduced via strip-cell-codes; or
+#| Nil if there is nothing to parse.
+sub parse-table-source(@raw, :@allow) is export {
+  my @lines = @raw.map(*.Str);
+  @lines.shift while @lines && @lines[0] !~~ /\S/;
+  @lines.pop   while @lines && @lines[*-1] !~~ /\S/;
+  return Nil unless @lines;
+  my $dedent = @lines.grep(/\S/).map({ .chars - .trim-leading.chars }).min;
+  @lines = @lines.map({ $_ ~~ /\S/ ?? .substr($dedent) !! '' });
+
+  my sub is-sep(Str $l) {
+    so $l ~~ /\S/ && $l ~~ /^ <[\-=_+|\ ]>* $/ && $l ~~ /<[\-=_]>/
+  }
+
+  my @groups;
+  my @sep-after;
+  my @cur;
+  for @lines -> $l {
+    if $l !~~ /\S/ or is-sep($l) {
+      if @cur {
+        @groups.push: @cur.List;
+        @sep-after.push: is-sep($l);
+        @cur = ();
+      } elsif is-sep($l) && @sep-after {
+        @sep-after[*-1] = True;
+      }
+    } else {
+      @cur.push: $l;
+    }
+  }
+  if @cur {
+    @groups.push: @cur.List;
+    @sep-after.push: False;
+  }
+  return Nil unless @groups;
+
+  my $has-header = @groups > 1 && @sep-after[0];
+  my @header-lines = $has-header ?? @groups[0].List !! ();
+  my @row-groups = $has-header ?? @groups[1..*] !! @groups;
+  if @row-groups == 1 {
+    @row-groups = @row-groups[0].map({ ($_,).List });
+  }
+
+  my @content = @lines.grep({ $_ ~~ /\S/ && !is-sep($_) });
+  my $max = @content.map(*.chars).max;
+  my sub padded(Str $l) { $l ~ (' ' x (0 max ($max - $l.chars))) }
+
+  my $pipe-mode = @content.grep({ $_ ~~ / [^^ | <?after \s>] <[|+]> [$$ | <?before \s>] / }).elems > @content.elems div 2;
+
+  my @ranges;
+  unless $pipe-mode {
+    # a character column is a gap candidate when it is blank in every
+    # content line; gaps two or more wide separate table columns
+    my @space = True xx $max;
+    for @content -> $l {
+      my $p = padded($l);
+      for ^$max -> $c {
+        @space[$c] = False if $p.substr($c, 1) ne ' ';
+      }
+    }
+    my $col = 0;
+    while $col < $max {
+      if @space[$col] { $col++; next }
+      my $s = $col;
+      my $e = $col;
+      while $e < $max {
+        if !@space[$e] { $e++; next }
+        my $run = $e;
+        $run++ while $run < $max && @space[$run];
+        last if $run - $e >= 2 || $run >= $max;
+        $e = $run;
+      }
+      @ranges.push: ($s, $e);
+      $col = $e;
+    }
+  }
+
+  my sub group-cells(@ls) {
+    my @cells;
+    if $pipe-mode {
+      for @ls -> $l {
+        my @c = $l.split(/ \s* <[|+]> \s* /);
+        @c.shift if @c && @c[0] !~~ /\S/;
+        @c.pop   if @c && @c[*-1] !~~ /\S/;
+        for @c.kv -> $k, $frag is copy {
+          $frag .= trim;
+          next unless $frag.chars;
+          @cells[$k] = (@cells[$k] // '') ~~ /\S/ ?? @cells[$k] ~ ' ' ~ $frag !! $frag;
+        }
+      }
+    } else {
+      for @ls -> $l {
+        my $p = padded($l);
+        for @ranges.kv -> $k, ($s, $e) {
+          my $frag = $p.substr($s, $e - $s).trim;
+          next unless $frag.chars;
+          @cells[$k] = (@cells[$k] // '') ~~ /\S/ ?? @cells[$k] ~ ' ' ~ $frag !! $frag;
+        }
+      }
+    }
+    @cells.map({ strip-cell-codes(($_ // ''), :@allow) }).List;
+  }
+
+  my @headers = @header-lines ?? group-cells(@header-lines) !! ();
+  my @rows = @row-groups.map({ group-cells($_.List) });
+  %( headers => @headers.List, rows => @rows.List );
+}
+
+#| The source-recovered cells for this table, or Nil when they can't be
+#| matched up (no source scanned, ordinal drift, or a row-count mismatch
+#| with the parsed Pod tree).
+sub table-source-data(Pod::Block::Table $pod) {
+  my $sources := $*table-sources;
+  return Nil without $sources;
+  my $cand = $sources[$*table-ordinal++];
+  return Nil without $cand;
+  my $parsed = parse-table-source($cand<lines>, allow => $cand<allow>);
+  return Nil without $parsed;
+  return Nil unless $parsed<rows>.elems == $pod.contents.elems;
+  $parsed;
+}
+
+sub table-gist(Pod::Block::Table $pod --> Str) is export {
+  my @headers;
+  my @rows;
+  with table-source-data($pod) {
+    @headers = .<headers>.List;
+    @rows = .<rows>.List;
+  } else {
+    @headers = $pod.headers.elems ?? table-row($pod.headers).List !! ();
+    @rows = $pod.contents.map({ table-row($_.List) });
+  }
+  my $ncol = (@headers.elems, |@rows.map(*.elems)).max;
+  return '' unless $ncol;
+  my sub pad(@cells) { @cells[^$ncol].map({ ($_ // '').Str }).Array }
+  # a real header row when the table has one; no "Field 1 / Field 2"
+  # placeholders when it doesn't
+  my $table = @headers ?? Pretty::Table.new !! Pretty::Table.new(:!header);
+  if @headers {
+    # Pretty::Table requires unique field names; repeated headers (eg. two
+    # "Or with..." columns) get invisible trailing spaces to disambiguate
+    my %seen;
+    my @unique = pad(@headers).map: -> $h {
+      my $n = %seen{$h}++;
+      $h ~ (' ' x $n)
+    };
+    $table.field-names(@unique);
+  }
+  $table.add-row(pad($_.List)) for @rows;
+  # align("l") walks the field names, so rows must be added first
+  $table.align("l");
   $table.gist
 }
 
+multi render(Pod::Block::Table $pod, Bool :$plain ) is export {
+  table-gist($pod)
+}
+
 multi render(\pane, Pod::Block::Table $pod, Bool :$plain ) is export {
-  my $table = Pretty::Table.new;
-  if $pod.headers.elems > 0 {
-    $table.add-row(table-row($pod.headers))
+  debug-pod(pane, $pod);
+  my $nest = do given $pod.config<nested> {
+    when Bool:D { $_ ?? 1 !! 0 }
+    when Int:D  { $_ }
+    default     { 0 }
   }
-  $pod.contents.map: { $table.add-row(table-row($_)) }
-  pane.put: $table.gist
+  my $indent = ($*pod-indent // 0) + 4 * $nest;
+  pane.put: "";
+  pane.put: [ ' ' x $indent, %COLORS<item_1> => $pod.caption ] if $pod.caption;
+  for table-gist($pod).lines -> $l {
+    pane.put: (' ' x $indent) ~ $l;
+  }
 }
 
 multi render(\pane, Pod::FormattingCode $pod) is export {
@@ -739,6 +1007,8 @@ sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DRAKU_DEBUG>) is 
   }
   my $*defn-bodies = extract-defn-bodies($file);
   my $*defn-ordinal = 0;
+  my $*table-sources = extract-table-sources($file);
+  my $*table-ordinal = 0;
   my $*pod-indent = 0;
   for $pod[0].contents -> $c {
     if $debug {
