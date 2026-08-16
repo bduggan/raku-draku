@@ -5,6 +5,7 @@ use Pretty::Table;
 use Log::Async;
 use Cache::Dir;
 use Draku::Conf;
+use Draku::Table;
 
 my $*debug-pod;
 my $color = Color.new('#54DD30');
@@ -772,133 +773,23 @@ sub strip-cell-codes(Str $text, :@allow, Bool :$inside-code = False --> Str) is 
   $out;
 }
 
-#| Parse a raw =table body per S26: rows are grouped by blank lines or
-#| horizontal separator lines (-, =, _, with optional + and |); a visible
-#| separator right after the first group marks it as the header row; a
-#| single unseparated group is one row per line. Columns are either
-#| whitespace-padded |/+ separators, or character columns that are blank
-#| in every content line (two or more wide -- the "double-space" rule),
-#| which also reassembles multi-line rows. Returns a Hash with <headers>
-#| (possibly empty) and <rows>, cells reduced via strip-cell-codes; or
-#| Nil if there is nothing to parse.
-sub parse-table-source(@raw, :@allow) is export {
-  my @lines = @raw.map(*.Str);
-  @lines.shift while @lines && @lines[0] !~~ /\S/;
-  @lines.pop   while @lines && @lines[*-1] !~~ /\S/;
-  return Nil unless @lines;
-  my $dedent = @lines.grep(/\S/).map({ .chars - .trim-leading.chars }).min;
-  @lines = @lines.map({ $_ ~~ /\S/ ?? .substr($dedent) !! '' });
-
-  my sub is-sep(Str $l) {
-    so $l ~~ /\S/ && $l ~~ /^ <[\-=_+|\ ]>* $/ && $l ~~ /<[\-=_]>/
-  }
-
-  my @groups;
-  my @sep-after;
-  my @cur;
-  for @lines -> $l {
-    if $l !~~ /\S/ or is-sep($l) {
-      if @cur {
-        @groups.push: @cur.List;
-        @sep-after.push: is-sep($l);
-        @cur = ();
-      } elsif is-sep($l) && @sep-after {
-        @sep-after[*-1] = True;
-      }
-    } else {
-      @cur.push: $l;
-    }
-  }
-  if @cur {
-    @groups.push: @cur.List;
-    @sep-after.push: False;
-  }
-  return Nil unless @groups;
-
-  my $has-header = @groups > 1 && @sep-after[0];
-  my @header-lines = $has-header ?? @groups[0].List !! ();
-  my @row-groups = $has-header ?? @groups[1..*] !! @groups;
-  if @row-groups == 1 {
-    @row-groups = @row-groups[0].map({ ($_,).List });
-  }
-
-  my @content = @lines.grep({ $_ ~~ /\S/ && !is-sep($_) });
-  my $max = @content.map(*.chars).max;
-  my sub padded(Str $l) { $l ~ (' ' x (0 max ($max - $l.chars))) }
-
-  my $pipe-mode = @content.grep({ $_ ~~ / [^^ | <?after \s>] <[|+]> [$$ | <?before \s>] / }).elems > @content.elems div 2;
-
-  my @ranges;
-  unless $pipe-mode {
-    # a character column is a gap candidate when it is blank in every
-    # content line; gaps two or more wide separate table columns
-    my @space = True xx $max;
-    for @content -> $l {
-      my $p = padded($l);
-      for ^$max -> $c {
-        @space[$c] = False if $p.substr($c, 1) ne ' ';
-      }
-    }
-    my $col = 0;
-    while $col < $max {
-      if @space[$col] { $col++; next }
-      my $s = $col;
-      my $e = $col;
-      while $e < $max {
-        if !@space[$e] { $e++; next }
-        my $run = $e;
-        $run++ while $run < $max && @space[$run];
-        last if $run - $e >= 2 || $run >= $max;
-        $e = $run;
-      }
-      @ranges.push: ($s, $e);
-      $col = $e;
-    }
-  }
-
-  my sub group-cells(@ls) {
-    my @cells;
-    if $pipe-mode {
-      for @ls -> $l {
-        my @c = $l.split(/ \s* <[|+]> \s* /);
-        @c.shift if @c && @c[0] !~~ /\S/;
-        @c.pop   if @c && @c[*-1] !~~ /\S/;
-        for @c.kv -> $k, $frag is copy {
-          $frag .= trim;
-          next unless $frag.chars;
-          @cells[$k] = (@cells[$k] // '') ~~ /\S/ ?? @cells[$k] ~ ' ' ~ $frag !! $frag;
-        }
-      }
-    } else {
-      for @ls -> $l {
-        my $p = padded($l);
-        for @ranges.kv -> $k, ($s, $e) {
-          my $frag = $p.substr($s, $e - $s).trim;
-          next unless $frag.chars;
-          @cells[$k] = (@cells[$k] // '') ~~ /\S/ ?? @cells[$k] ~ ' ' ~ $frag !! $frag;
-        }
-      }
-    }
-    @cells.map({ strip-cell-codes(($_ // ''), :@allow) }).List;
-  }
-
-  my @headers = @header-lines ?? group-cells(@header-lines) !! ();
-  my @rows = @row-groups.map({ group-cells($_.List) });
-  %( headers => @headers.List, rows => @rows.List );
-}
-
-#| The source-recovered cells for this table, or Nil when they can't be
-#| matched up (no source scanned, ordinal drift, or a row-count mismatch
-#| with the parsed Pod tree).
+#| The source-recovered cells for this table (structure parsed by
+#| Draku::Table's grammar, cells reduced via strip-cell-codes), or Nil
+#| when they can't be matched up (no source scanned, ordinal drift, or a
+#| row-count mismatch with the parsed Pod tree).
 sub table-source-data(Pod::Block::Table $pod) {
   my $sources := $*table-sources;
   return Nil without $sources;
   my $cand = $sources[$*table-ordinal++];
   return Nil without $cand;
-  my $parsed = parse-table-source($cand<lines>, allow => $cand<allow>);
+  my $parsed = parse-table-source($cand<lines>);
   return Nil without $parsed;
   return Nil unless $parsed<rows>.elems == $pod.contents.elems;
-  $parsed;
+  my @allow = |$cand<allow>;
+  %(
+    headers => $parsed<headers>.map({ strip-cell-codes($_, :@allow) }).List,
+    rows    => $parsed<rows>.map({ .map({ strip-cell-codes($_, :@allow) }).List }).List,
+  );
 }
 
 sub table-gist(Pod::Block::Table $pod --> Str) is export {
