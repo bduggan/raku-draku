@@ -53,10 +53,38 @@ multi render(\pane, Pod::Block::Named $pod) is export {
   }
 }
 
+#| Render a list of Pod content items (Str / Pod::FormattingCode / ...) into
+#| a list of pieces suitable for pane.put(:wrap<word>). Pane's word-wrap
+#| inserts a single space between every piece, so text that is directly
+#| glued to the previous item in the source (eg. trailing punctuation right
+#| after a L<> or C<> code, with no intervening whitespace) is folded onto
+#| the end of the previous piece instead of becoming its own space-padded
+#| piece.
+sub render-glued-pieces(@contents) is export {
+  my @pieces;
+  for @contents -> $item {
+    my $piece = render($item);
+    my $color = $piece ~~ Pair ?? $piece.key !! Nil;
+    my $text  = ($piece ~~ Pair ?? $piece.value !! $piece).Str;
+    next if $text eq '';
+    if $item ~~ Str && $text !~~ /^^ \s/ && @pieces {
+      if $text ~~ /^ (<-[\s]>+) (.*)$/ {
+        my ($lead, $rest) = (~$0, ~$1);
+        my $prev = @pieces[*-1];
+        @pieces[*-1] = $prev ~~ Pair ?? ($prev.key => $prev.value ~ $lead) !! ($prev ~ $lead);
+        $text = $rest;
+      }
+    }
+    next if $text eq '';
+    @pieces.push: $color.defined ?? ($color => $text) !! $text;
+  }
+  @pieces;
+}
+
 multi render(\pane, Pod::Block::Para $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "";
-  my @pieces = $pod.contents.map: { render($_) }
+  my @pieces = render-glued-pieces($pod.contents);
   pane.put: @pieces, :wrap<word>, meta => :$pod;
 }
 
@@ -101,7 +129,7 @@ multi render(\pane, Pod::Defn $pod) is export {
   pane.put: [ %COLORS<item_1> => $term ];
   for $pod.contents -> $c {
     next unless $c ~~ Pod::Block::Para && $c.contents;
-    my @pieces = $c.contents.map: { render($_) }
+    my @pieces = render-glued-pieces($c.contents);
     pane.put: [ '    ', |@pieces ], :wrap<word>, meta => :$pod;
   }
 }
@@ -116,11 +144,25 @@ multi render(Pod::Defn $pod, Bool :$plain) is export {
 multi render(\pane, Pod::Block::Code $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "--code start--" if $*debug-pod;
+  # $pod.contents is a flat mix of Str and Pod::FormattingCode (eg. R<>)
+  # fragments, with lone "\n" Str elements marking line boundaries; group
+  # the fragments back into whole logical lines before printing them.
+  my @lines;
+  my $current = '';
+  for $pod.contents -> $c {
+    if $c ~~ Str && $c eq "\n" {
+      @lines.push: $current;
+      $current = '';
+    } else {
+      $current ~= $c ~~ Str ?? $c !! render($c, :plain);
+    }
+  }
+  @lines.push: $current if $current ne '';
   my $i = 1;
-  $pod.contents.map: -> $line {
-    last if $i++ == $pod.contents.elems && $line !~~ /\S/;
+  for @lines -> $line {
+    last if $i++ == @lines.elems && $line !~~ /\S/;
     next unless $line ~~ /\S/;
-    pane.put: [ %COLORS<code> => ($_ // "").indent(4) ] for $line.?lines
+    pane.put: [ %COLORS<code> => $line.indent(4) ];
   }
   pane.put: "--code end--" if $*debug-pod;
 }
@@ -149,8 +191,8 @@ multi render(Pod::FormattingCode $pod, Bool :$plain) is export {
     }
     when 'L' {
       # also has meta
-      return $pod.contents.map({render($_, :plain )}) if $plain;
-      %COLORS<link> => $pod.contents.map({render($_, :plain )}) 
+      return $pod.contents.map({render($_, :plain )}).join(' ') if $plain;
+      %COLORS<link> => $pod.contents.map({render($_, :plain )}).join(' ')
     }
     default {
       return "unknown : " ~ $pod.raku if $plain;
