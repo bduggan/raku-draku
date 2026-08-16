@@ -57,7 +57,7 @@ multi render(\pane, Pod::Block::Para $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "";
   my @pieces = $pod.contents.map: { render($_) }
-  pane.put: @pieces, :wrap<hard>, meta => :$pod;
+  pane.put: @pieces, :wrap<word>, meta => :$pod;
 }
 
 multi render( Pod::Block::Para $pod, Bool :$plain) is export {
@@ -109,7 +109,7 @@ sub render-all(\pane, @pod) is export {
 }
 
 multi render(\pane, Str $pod) is export {
-  pane.put: [ %COLORS<text> => $pod], :wrap<hard>;
+  pane.put: [ %COLORS<text> => $pod], :wrap<word>;
 }
 
 multi render(Str $pod, Bool :$plain) is export {
@@ -160,7 +160,7 @@ multi render(\pane, Pod::FormattingCode $pod) is export {
 }
 
 multi render(\pane, $pod) is export {
-  pane.put: [ %COLORS<default> => $pod.raku], :wrap<hard>;
+  pane.put: [ %COLORS<default> => $pod.raku], :wrap<word>;
 }
 
 multi render($pod, Bool :$plain) is export {
