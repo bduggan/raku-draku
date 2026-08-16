@@ -129,6 +129,20 @@ sub strip-formatting-codes(Str $s) is export {
 #| like L<C<=code>|#Code blocks>.
 sub inline-pod-pieces(Str $text --> List) is export {
   my @pieces;
+  # Glue plain text directly onto the previous piece when the source had no
+  # whitespace at the boundary (eg. the "begin" left behind right after a
+  # zero-width Z<> code, as in "=Z<>begin code"), instead of letting a new,
+  # separately-spaced piece form -- mirrors render-glued-pieces.
+  my sub push-plain(Str $s is copy) {
+    return unless $s.chars;
+    while @pieces && $s !~~ /^^ \s/ && $s ~~ /^ (<-[\s]>+) (.*)$/ {
+      my ($lead, $rest) = (~$0, ~$1);
+      my $prev = @pieces[*-1];
+      @pieces[*-1] = $prev ~~ Pair ?? ($prev.key => $prev.value ~ $lead) !! ($prev ~ $lead);
+      $s = $rest;
+    }
+    @pieces.push: $s if $s.chars;
+  }
   my $buf = '';
   my $pos = 0;
   my $len = $text.chars;
@@ -147,18 +161,18 @@ sub inline-pod-pieces(Str $text --> List) is export {
       }
       if $depth == 0 {
         my $inner = $text.substr($start, $i - $start - 1);
-        if $buf.chars { @pieces.push: $buf; $buf = ''; }
+        push-plain($buf); $buf = '';
         given $ch {
           when 'L' {
             my ($label, $target) = $inner.split('|', 2);
             my $label-text = inline-pod-pieces($label // $target).map({ $_ ~~ Pair ?? $_.value !! $_ }).join('');
-            @pieces.push: %COLORS<link> => $label-text;
+            @pieces.push: %COLORS<link> => $label-text if $label-text.chars;
           }
           when 'C' | 'B' | 'I' | 'R' | 'X' | 'E' | 'N' {
-            @pieces.push: %COLORS{"format_$ch"} => $inner;
+            @pieces.push: %COLORS{"format_$ch"} => $inner if $inner.chars;
           }
           default {
-            @pieces.push: $inner;
+            push-plain($inner);
           }
         }
         $pos = $i;
@@ -168,19 +182,99 @@ sub inline-pod-pieces(Str $text --> List) is export {
     $buf ~= $ch;
     $pos++;
   }
-  @pieces.push: $buf if $buf.chars;
+  push-plain($buf);
   @pieces;
 }
 
-#| Splits raw =defn body text around literal "=begin NAME" / "=end NAME"
-#| markers (also unparsed by Rakudo when nested inside a =defn) so that
-#| example blocks embedded in the flattened text are set apart from the
-#| surrounding prose, rather than blending into one giant word-wrapped
-#| paragraph. Original line breaks within those examples are already lost
-#| upstream, so this can only isolate the markers, not restore layout.
-sub defn-segments(Str $text --> List) is export {
-  my $marked = $text.subst: / '=' ['begin' | 'end'] \s+ \S+ /, { "\0" ~ $/ ~ "\0" }, :g;
-  $marked.split("\0").map(*.trim).grep(*.chars).List;
+#| Reparses raw =defn body text (see inline-pod-pieces) into display lines.
+#| Each line is either `marker => Str` for a literal "=begin NAME" / "=end
+#| NAME" token, or a List of pieces for ordinary word-wrapped prose/code
+#| spans. Marker detection only runs over plain-text stretches -- text
+#| inside a formatting code escape (eg. the deliberately-literal
+#| B<=begin code :nested(0)>, used to show =begin/=end syntax without
+#| triggering it) is treated as opaque and never split, so escaped example
+#| syntax stays on one line instead of being torn apart. Original line
+#| breaks within these examples are already lost upstream (Rakudo doesn't
+#| parse nested delimited blocks inside =defn), so this can only isolate
+#| the markers, not restore layout.
+sub defn-body-lines(Str $text --> List) is export {
+  my @lines;
+  my @pieces;
+  my $buf = '';
+
+  my sub flush-pieces {
+    @lines.push: @pieces.List if @pieces;
+    @pieces = ();
+  }
+  my sub push-plain-piece(Str $s is copy) {
+    return unless $s.chars;
+    while @pieces && $s !~~ /^^ \s/ && $s ~~ /^ (<-[\s]>+) (.*)$/ {
+      my ($lead, $rest) = (~$0, ~$1);
+      my $prev = @pieces[*-1];
+      @pieces[*-1] = $prev ~~ Pair ?? ($prev.key => $prev.value ~ $lead) !! ($prev ~ $lead);
+      $s = $rest;
+    }
+    @pieces.push: $s if $s.chars;
+  }
+  my sub flush-buf {
+    return unless $buf.chars;
+    for $buf.split(/ '=' ['begin' | 'end'] \s+ \S+ /, :v) -> $part {
+      if $part ~~ Match {
+        flush-pieces;
+        @lines.push: (marker => $part.Str);
+      } else {
+        push-plain-piece($part.Str);
+      }
+    }
+    $buf = '';
+  }
+  my sub push-code-piece($color, Str $text) {
+    return unless $text.chars;
+    flush-buf;
+    @pieces.push: $color.defined ?? ($color => $text) !! $text;
+  }
+
+  my $pos = 0;
+  my $len = $text.chars;
+  while $pos < $len {
+    my $ch = $text.substr($pos, 1);
+    if $ch ~~ /<[A..Z]>/ && $pos + 1 < $len && $text.substr($pos + 1, 1) eq '<' {
+      my $start = $pos + 2;
+      my $i = $start;
+      my $depth = 1;
+      while $i < $len && $depth > 0 {
+        given $text.substr($i, 1) {
+          when '<' { $depth++ }
+          when '>' { $depth-- }
+        }
+        $i++;
+      }
+      if $depth == 0 {
+        my $inner = $text.substr($start, $i - $start - 1);
+        given $ch {
+          when 'L' {
+            my ($label, $target) = $inner.split('|', 2);
+            my $label-text = inline-pod-pieces($label // $target).map({ $_ ~~ Pair ?? $_.value !! $_ }).join('');
+            push-code-piece(%COLORS<link>, $label-text);
+          }
+          when 'C' | 'B' | 'I' | 'V' | 'R' | 'X' | 'E' | 'N' {
+            push-code-piece(%COLORS{"format_$ch"}, $inner);
+          }
+          default {
+            flush-buf;
+            push-plain-piece($inner);
+          }
+        }
+        $pos = $i;
+        next;
+      }
+    }
+    $buf ~= $ch;
+    $pos++;
+  }
+  flush-buf;
+  flush-pieces;
+  @lines;
 }
 
 multi render(\pane, Pod::Defn $pod) is export {
@@ -192,11 +286,11 @@ multi render(\pane, Pod::Defn $pod) is export {
     next unless $c ~~ Pod::Block::Para && $c.contents;
     for $c.contents -> $item {
       if $item ~~ Str {
-        for defn-segments($item) -> $seg {
-          if $seg ~~ /^ '=' ['begin' | 'end'] \s+ / {
-            pane.put: [ '    ', %COLORS<code> => $seg ];
+        for defn-body-lines($item) -> $line {
+          if $line ~~ Pair && $line.key eq 'marker' {
+            pane.put: [ '    ', %COLORS<code> => $line.value ];
           } else {
-            pane.put: [ '    ', |inline-pod-pieces($seg) ], :wrap<word>, meta => :$pod;
+            pane.put: [ '    ', |$line ], :wrap<word>, meta => :$pod;
           }
         }
       } else {
