@@ -36,21 +36,81 @@ sub debug-pod(\pane, $pod) is export {
   pane.put: [ %COLORS<named> => $pod.raku], :wrap<hard>;
 }
 
-multi render(\pane, Pod::Block::Named $pod) is export {
-  debug-pod(pane, $pod);
-  my $contents = join " ", $pod.contents.map: { render($^c, :plain) }
-  pane.put: "";
-  given $pod.name {
-    when 'TITLE' {
-      pane.put: [ %COLORS<title> => $contents], :center
-    }
-    when 'SUBTITLE' {
-      pane.put: [ %COLORS<subtitle> => $contents], :center
-    }
-    default {
-      pane.put: [ %COLORS<default> => $contents], :center
+#| Word-wrap colored pieces onto the pane with a fixed left indent on every
+#| line. Terminal::UI's :wrap<word> can't indent: it splits piece values with
+#| .words, so whitespace-only pieces vanish and continuation lines start at
+#| column 0. Pair keys are colors and take no display width.
+sub put-wrapped(\pane, @pieces, Int :$indent = 0, :%meta) is export {
+  my $width = ((pane.width // 80) - $indent) max 20;
+  my @line;
+  my $len = 0;
+  my sub flush {
+    return unless @line;
+    pane.put: [ ' ' x $indent, |@line ], :%meta;
+    @line = ();
+    $len = 0;
+  }
+  for @pieces -> $p {
+    my $color = $p ~~ Pair ?? $p.key !! Nil;
+    for ($p ~~ Pair ?? $p.value !! $p).Str.words -> $w {
+      flush if $len && $len + 1 + $w.chars > $width;
+      my $text = $len ?? " $w" !! $w;
+      my $prev-color = @line ?? (@line[*-1] ~~ Pair ?? @line[*-1].key !! Nil) !! Any;
+      if @line && $prev-color eqv $color {
+        @line[*-1] = $color.defined ?? ($color => @line[*-1].value ~ $text) !! (@line[*-1] ~ $text);
+      } else {
+        @line.push: $color.defined ?? ($color => $text) !! $text;
+      }
+      $len += $text.chars;
     }
   }
+  flush;
+}
+
+multi render(\pane, Pod::Block::Named $pod) is export {
+  debug-pod(pane, $pod);
+  given $pod.name {
+    when 'TITLE' {
+      pane.put: "";
+      pane.put: [ %COLORS<title> => join " ", $pod.contents.map: { render($^c, :plain) } ], :center
+    }
+    when 'SUBTITLE' {
+      pane.put: "";
+      pane.put: [ %COLORS<subtitle> => join " ", $pod.contents.map: { render($^c, :plain) } ], :center
+    }
+    # All-caps names are semantic blocks. Short ones (VERSION, AUTHOR, ...)
+    # keep the old centered one-liner; ones holding real structure (eg. the
+    # SUMMARY appendix full of headings and tables) render block by block.
+    # Lowercase names (=begin nested, =for para :nested, ...) are ordinary
+    # structural blocks: render their contents recursively, indenting one
+    # level per :nested count.
+    when /^ <:Lu>+ $/ {
+      if $pod.contents.elems <= 1 && $pod.contents.all ~~ Pod::Block::Para | Str {
+        pane.put: "";
+        pane.put: [ %COLORS<default> => join " ", $pod.contents.map: { render($^c, :plain) } ], :center
+      } else {
+        render(pane, $_) for $pod.contents;
+      }
+    }
+    default {
+      my $nest = do given $pod.config<nested> {
+        when Bool:D { $_ ?? 1 !! 0 }
+        when Int:D  { $_ }
+        default     { $pod.name eq 'nested' ?? 1 !! 0 }
+      }
+      my $indent = ($*pod-indent // 0) + 4 * $nest;
+      {
+        my $*pod-indent = $indent;
+        render(pane, $_) for $pod.contents;
+      }
+    }
+  }
+}
+
+multi render(Pod::Block::Named $pod, Bool :$plain) is export {
+  my $contents = join " ", $pod.contents.map: { render($^c, :plain) }
+  return $contents if $plain;
+  %COLORS<default> => $contents
 }
 
 #| Render a list of Pod content items (Str / Pod::FormattingCode / ...) into
@@ -85,7 +145,7 @@ multi render(\pane, Pod::Block::Para $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "";
   my @pieces = render-glued-pieces($pod.contents);
-  pane.put: @pieces, :wrap<word>, meta => :$pod;
+  put-wrapped(pane, @pieces, :indent($*pod-indent // 0), meta => %(:$pod));
 }
 
 multi render( Pod::Block::Para $pod, Bool :$plain) is export {
@@ -112,10 +172,54 @@ multi render(Pod::Heading $pod, Bool :$plain) is export {
 
 
 multi render(\pane, Pod::Item $pod) is export {
-  # level, contents
-  my $contents = ( $pod.contents.map: { render($^c, :plain) }).join("\n");
+  debug-pod(pane, $pod);
   my $level = $pod.level;
-  pane.put: [ %COLORS{"item_$level"} => ' ' ~ ('*' x $level) ~ " $contents" ];
+  my $base = $*pod-indent // 0;
+  my @contents = $pod.contents.List;
+  # The leading paragraph shares the bullet's line (word-wrapped); any
+  # further blocks (code examples, more paragraphs, ...) render on their
+  # own, indented one level under the bullet, instead of being flattened
+  # into a single truncated line of :plain text.
+  my @pieces = %COLORS{"item_$level"} => ' ' ~ ('*' x $level);
+  if @contents && @contents[0] ~~ Pod::Block::Para {
+    @pieces.append: render-glued-pieces(@contents.shift.contents).map: {
+      $_ ~~ Pair ?? $_ !! (%COLORS{"item_$level"} => $_)
+    };
+  }
+  put-wrapped(pane, @pieces, :indent($base), meta => %( pod => $pod ));
+  if @contents {
+    my $indent = $base + 4;
+    my $*pod-indent = $indent;
+    render(pane, $_) for @contents;
+  }
+}
+
+multi render(Pod::Item $pod, Bool :$plain) is export {
+  my $contents = ( $pod.contents.map: { render($^c, :plain) }).join(' ');
+  my $text = ('*' x $pod.level) ~ " $contents";
+  return $text if $plain;
+  %COLORS{"item_{$pod.level}"} => $text
+}
+
+multi render(\pane, Pod::Block::Comment $pod) is export { }
+
+multi render(Pod::Block::Comment $pod, Bool :$plain) is export {
+  return '' if $plain;
+  '' => ''
+}
+
+#| =config blocks direct the renderer; they have no visible content.
+multi render(\pane, Pod::Config $pod) is export { }
+
+multi render(Pod::Config $pod, Bool :$plain) is export {
+  return '' if $plain;
+  '' => ''
+}
+
+multi render(Pod::Block::Code $pod, Bool :$plain) is export {
+  my $text = $pod.contents.map({ $_ ~~ Str ?? $_ !! render($_, :plain) }).join('');
+  return $text if $plain;
+  %COLORS<code> => $text
 }
 
 sub strip-formatting-codes(Str $s) is export {
@@ -297,11 +401,169 @@ sub defn-body-lines(Str $text --> List) is export {
   @lines;
 }
 
+#| Rakudo collapses an entire =defn body into one space-joined paragraph:
+#| line breaks (and thus the layout of any code examples inside) never make
+#| it into the Pod tree. Recover them by re-reading the =begin defn blocks
+#| straight from the source file: each entry is term => the raw body lines.
+#| Non-delimited =defn forms push an undefined entry to keep ordinals
+#| aligned with the Pod::Defn objects rendered in document order.
+sub extract-defn-bodies(IO::Path $file --> List) is export {
+  my @bodies;
+  my @lines = try { $file.lines } // ();
+  my $i = 0;
+  while $i < @lines {
+    if @lines[$i] ~~ /^ '=begin' \s+ 'defn' >>/ {
+      $i++;
+      $i++ while $i < @lines && @lines[$i] !~~ /\S/;
+      my @term;
+      while $i < @lines && @lines[$i] ~~ /\S/ && @lines[$i] !~~ /^ '=end' \s+ 'defn' >>/ {
+        @term.push: @lines[$i].trim;
+        $i++;
+      }
+      my @body;
+      while $i < @lines && @lines[$i] !~~ /^ '=end' \s+ 'defn' >>/ {
+        @body.push: @lines[$i];
+        $i++;
+      }
+      @bodies.push: %( term => @term.join(' '), body => @body.List );
+    } elsif @lines[$i] ~~ /^ ['=defn' | '=for' \s+ 'defn'] >>/ {
+      @bodies.push: Any;
+      $i++;
+    } else {
+      $i++;
+    }
+  }
+  @bodies.List;
+}
+
+#| The raw source body for this Pod::Defn, or Nil when it can't be matched
+#| up (no source scanned, ordinal drift, or a non-delimited defn form).
+sub defn-source-body(Pod::Defn $pod) {
+  my $bodies := $*defn-bodies;
+  return Nil without $bodies;
+  my $term = $pod.term.trim;
+  my $cand = $bodies[$*defn-ordinal++];
+  return $cand<body> if $cand.defined && $cand<term> eq $term;
+  with $bodies.first({ .defined && .<term> eq $term }) { return .<body> }
+  Nil
+}
+
+#| Split a raw code-example line into colored pieces. Formatting codes are
+#| normally left as literal text inside code blocks; codes named by :allow
+#| get their format color instead. Z<> (zero-width) is always dropped and
+#| V<> (verbatim) always unwraps to its literal contents -- S26 uses both
+#| to sneak "=begin"/"=end" lines into examples without terminating the
+#| enclosing block, so they must disappear even without an :allow.
+sub code-line-pieces(Str $text, :@allow --> List) is export {
+  my @pieces;
+  my $buf = '';
+  my sub flush-buf {
+    # .Str: a bare $buf would hand the Pair the mutable container itself
+    @pieces.push: (%COLORS<code> => $buf.Str) if $buf.chars;
+    $buf = '';
+  }
+  my $pos = 0;
+  my $len = $text.chars;
+  while $pos < $len {
+    my $ch = $text.substr($pos, 1);
+    if $ch ~~ /<[A..Z]>/ && $pos + 1 < $len && $text.substr($pos + 1, 1) eq '<' {
+      my $start = $pos + 2;
+      my $i = $start;
+      my $depth = 1;
+      while $i < $len && $depth > 0 {
+        given $text.substr($i, 1) {
+          when '<' { $depth++ }
+          when '>' { $depth-- }
+        }
+        $i++;
+      }
+      if $depth == 0 && ($ch eq 'Z' | 'V' || $ch (elem) @allow) {
+        my $inner = $text.substr($start, $i - $start - 1);
+        flush-buf;
+        given $ch {
+          when 'Z' { }
+          when 'V' { @pieces.push: (%COLORS<code> => $inner) if $inner.chars }
+          default  { @pieces.push: (%COLORS{"format_$ch"} => strip-formatting-codes($inner)) if $inner.chars }
+        }
+        $pos = $i;
+        next;
+      }
+    }
+    $buf ~= $ch;
+    $pos++;
+  }
+  flush-buf;
+  @pieces.List;
+}
+
+#| Print the lines of a code example recovered from defn source: strip the
+#| common indentation, then show each line verbatim (modulo the formatting
+#| codes handled by code-line-pieces) at the defn's code nesting depth.
+sub render-defn-code-lines(\pane, @raw, :@allow) {
+  my @lines = @raw;
+  @lines.shift while @lines && @lines[0] !~~ /\S/;
+  @lines.pop   while @lines && @lines[*-1] !~~ /\S/;
+  return unless @lines;
+  my $dedent = @lines.grep(/\S/).map({ .chars - .trim-leading.chars }).min;
+  pane.put: "";
+  for @lines -> $raw-line {
+    if $raw-line !~~ /\S/ {
+      pane.put: "";
+      next;
+    }
+    my $line = $raw-line.substr($dedent);
+    pane.put: [ ' ' x (8 + ($*pod-indent // 0)), |code-line-pieces($line, :@allow) ];
+  }
+}
+
+#| Render a defn body from its raw source lines: blank-line-separated prose
+#| paragraphs are word-wrapped, and =begin code / =end code regions keep
+#| their original layout. An example's closing =end code must sit at the
+#| same indentation as its =begin so that escaped, more-deeply-indented
+#| "=end code" text inside an example can't terminate it early.
+sub render-defn-source-body(\pane, @lines, :%meta) {
+  my @para;
+  my sub flush-para {
+    return unless @para;
+    pane.put: "";
+    put-wrapped(pane, inline-pod-pieces(@para.join(' ')), :indent(4 + ($*pod-indent // 0)), :%meta);
+    @para = ();
+  }
+  my $i = 0;
+  while $i < @lines {
+    my $line = @lines[$i];
+    if $line ~~ /^ $<margin>=(\s*) '=begin' \s+ 'code' >> \s* $<opts>=(.*) $/ {
+      flush-para;
+      my $margin = $<margin>.Str;
+      my @allow = ($<opts>.Str ~~ / ':allow<' $<l>=(<-[>]>*) '>' /) ?? $<l>.Str.words.List !! ();
+      $i++;
+      my @code;
+      while $i < @lines && @lines[$i] !~~ /^ $margin '=end' \s+ 'code' \s* $/ {
+        @code.push: @lines[$i];
+        $i++;
+      }
+      $i++ if $i < @lines;
+      render-defn-code-lines(pane, @code, :@allow);
+    } elsif $line !~~ /\S/ {
+      flush-para;
+      $i++;
+    } else {
+      @para.push: $line.trim;
+      $i++;
+    }
+  }
+  flush-para;
+}
+
 multi render(\pane, Pod::Defn $pod) is export {
   debug-pod(pane, $pod);
   my $term = strip-formatting-codes($pod.term);
   pane.put: "";
   pane.put: [ %COLORS<item_1> => $term ];
+  with defn-source-body($pod) -> @body {
+    render-defn-source-body(pane, @body, meta => %(:$pod));
+    return;
+  }
   for $pod.contents -> $c {
     next unless $c ~~ Pod::Block::Para && $c.contents;
     for $c.contents -> $item {
@@ -310,7 +572,7 @@ multi render(\pane, Pod::Defn $pod) is export {
           if $line ~~ Pair && $line.key eq 'marker' {
             pane.put: [ '    ', %COLORS<code> => $line.value ];
           } else {
-            pane.put: [ '    ', |$line ], :wrap<word>, meta => :$pod;
+            put-wrapped(pane, @$line, :indent(4), meta => %(:$pod));
           }
         }
       } else {
@@ -348,7 +610,7 @@ multi render(\pane, Pod::Block::Code $pod) is export {
   for @lines -> $line {
     last if $i++ == @lines.elems && $line !~~ /\S/;
     next unless $line ~~ /\S/;
-    pane.put: [ %COLORS<code> => $line.indent(4) ];
+    pane.put: [ %COLORS<code> => $line.indent(4 + ($*pod-indent // 0)) ];
   }
   pane.put: "--code end--" if $*debug-pod;
 }
@@ -463,6 +725,9 @@ sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DRAKU_DEBUG>) is 
     }
     return;
   }
+  my $*defn-bodies = extract-defn-bodies($file);
+  my $*defn-ordinal = 0;
+  my $*pod-indent = 0;
   for $pod[0].contents -> $c {
     if $debug {
       pane.put: [ $c.^name.fmt('%20s'), '  ', t.color('#777777') => (~render($c.contents[0],:plain)).raku ], meta => %( pod => $c );
