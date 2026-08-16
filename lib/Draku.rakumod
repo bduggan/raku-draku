@@ -20,6 +20,9 @@ Draku -- Documentation viewer for Raku
   # Search the core docs for a phrase
   draku search List
 
+  # Render a single rakudoc file in the console
+  draku ./my-module.rakudoc
+
 =head1 DESCRIPTION
 
 This is a system for viewing raku pod in a terminal console.

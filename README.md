@@ -21,6 +21,9 @@ SYNOPSIS
     # Search the core docs for a phrase
     draku search List
 
+    # Render a single rakudoc file in the console
+    draku ./my-module.rakudoc
+
 DESCRIPTION
 ===========
 
