@@ -90,6 +90,29 @@ multi render(\pane, Pod::Item $pod) is export {
   pane.put: [ %COLORS{"item_$level"} => ' ' ~ ('*' x $level) ~ " $contents" ];
 }
 
+sub strip-formatting-codes(Str $s) is export {
+  $s.subst: /<[A..Z]> '<' (.*?) '>'/, -> $/ { ~$0 }, :g
+}
+
+multi render(\pane, Pod::Defn $pod) is export {
+  debug-pod(pane, $pod);
+  my $term = strip-formatting-codes($pod.term);
+  pane.put: "";
+  pane.put: [ %COLORS<item_1> => $term ];
+  for $pod.contents -> $c {
+    next unless $c ~~ Pod::Block::Para && $c.contents;
+    my @pieces = $c.contents.map: { render($_) }
+    pane.put: [ '    ', |@pieces ], :wrap<word>, meta => :$pod;
+  }
+}
+
+multi render(Pod::Defn $pod, Bool :$plain) is export {
+  my $term = strip-formatting-codes($pod.term);
+  my $body = $pod.contents.map({ render($_, :plain) }).join(' ');
+  return "$term $body" if $plain;
+  %COLORS<item_1> => "$term $body"
+}
+
 multi render(\pane, Pod::Block::Code $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "--code start--" if $*debug-pod;
