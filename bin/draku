@@ -7,6 +7,7 @@ use Log::Async;
 use Draku::Render;
 use Draku::UI;
 use Draku::Search;
+use Draku::Fetch;
 
 my %*SUB-MAIN-OPTS = :named-anywhere, ;
 my $*debug-pod;
@@ -71,6 +72,14 @@ multi MAIN($module) {
     }
   }
   setup;
+
+  unless @found {
+    show-not-installed(top, btm, $module);
+    ui.interact;
+    ui.shutdown;
+    return;
+  }
+
   my $file;
   for @found -> $f {
     $file //= $f<repo>.source-file('sources').child( $f<module>[0].values[0]<file>);
@@ -135,6 +144,32 @@ multi MAIN(
 
   ui.interact;
   ui.shutdown;
+}
+
+sub show-not-installed(\pane, \nav, $module) {
+  pane.put: "'$module' is not installed, checking ecosystems...";
+  ui.refresh;
+
+  my $dist-path = fetch-module-source($module);
+  unless $dist-path {
+    pane.put: "";
+    pane.put: "Could not find '$module' in the ecosystem indices.";
+    return;
+  }
+
+  my @docs = find-rakudoc-files($dist-path);
+  unless @docs {
+    pane.put: "";
+    pane.put: "No rakudoc files found under $dist-path/docs or $dist-path/doc";
+    pane.put: "Fetched source is at: $dist-path";
+    return;
+  }
+
+  render-file(pane, @docs[0]);
+  nav.put: "Docs for $module (fetched from the ecosystem, not installed):";
+  for @docs -> $file {
+    nav.put: $file.basename, meta => %( :$file );
+  }
 }
 
 sub show-repos(\pane, :repo($selected) = Nil) {
