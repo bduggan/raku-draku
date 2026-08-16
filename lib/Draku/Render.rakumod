@@ -40,15 +40,19 @@ sub debug-pod(\pane, $pod) is export {
 #| line. Terminal::UI's :wrap<word> can't indent: it splits piece values with
 #| .words, so whitespace-only pieces vanish and continuation lines start at
 #| column 0. Pair keys are colors and take no display width.
-sub put-wrapped(\pane, @pieces, Int :$indent = 0, :%meta) is export {
-  my $width = ((pane.width // 80) - $indent) max 20;
+sub put-wrapped(\pane, @pieces, Int :$indent = 0, Int :$hang = 0, :%meta) is export {
+  my $width = ((pane.width // 80) - $indent - $hang) max 20;
   my @line;
   my $len = 0;
+  my $first = True;
   my sub flush {
     return unless @line;
-    pane.put: [ ' ' x $indent, |@line ], :%meta;
+    # $hang: extra indent on continuation lines (eg. aligning wrapped item
+    # text under the text after its bullet)
+    pane.put: [ ' ' x ($indent + ($first ?? 0 !! $hang)), |@line ], :%meta;
     @line = ();
     $len = 0;
+    $first = False;
   }
   for @pieces -> $p {
     my $color = $p ~~ Pair ?? $p.key !! Nil;
@@ -186,7 +190,7 @@ multi render(\pane, Pod::Item $pod) is export {
       $_ ~~ Pair ?? $_ !! (%COLORS{"item_$level"} => $_)
     };
   }
-  put-wrapped(pane, @pieces, :indent($base), meta => %( pod => $pod ));
+  put-wrapped(pane, @pieces, :indent($base), :hang($level + 2), meta => %( pod => $pod ));
   if @contents {
     my $indent = $base + 4;
     my $*pod-indent = $indent;
@@ -598,11 +602,13 @@ multi render(\pane, Pod::Block::Code $pod) is export {
   my @lines;
   my $current = '';
   for $pod.contents -> $c {
-    if $c ~~ Str && $c eq "\n" {
+    # newlines can also arrive embedded mid-string (or inside a multi-line
+    # formatting code), not just as lone "\n" elements
+    my @parts = ($c ~~ Str ?? $c !! render($c, :plain)).split("\n");
+    $current ~= @parts.shift;
+    for @parts -> $part {
       @lines.push: $current;
-      $current = '';
-    } else {
-      $current ~= $c ~~ Str ?? $c !! render($c, :plain);
+      $current = $part;
     }
   }
   @lines.push: $current if $current ne '';
@@ -654,21 +660,27 @@ multi render(Pod::FormattingCode $pod, Bool :$plain) is export {
   }
 }
 
+#| Table cells arrive as raw text: formatting codes are left unparsed by
+#| Rakudo, so strip them for display.
+sub table-row(@cells) {
+  @cells.map({ $_ ~~ Str ?? strip-formatting-codes($_) !! render($_, :plain) }).List
+}
+
 multi render(Pod::Block::Table $pod, Bool :$plain ) is export {
   my $table = Pretty::Table.new;
   if $pod.headers.elems > 0 {
-    $table.add-row($pod.headers)
+    $table.add-row(table-row($pod.headers))
   }
-  $pod.contents.map: { $table.add-row($_) }
+  $pod.contents.map: { $table.add-row(table-row($_)) }
   $table.gist
 }
 
 multi render(\pane, Pod::Block::Table $pod, Bool :$plain ) is export {
   my $table = Pretty::Table.new;
   if $pod.headers.elems > 0 {
-    $table.add-row($pod.headers)
+    $table.add-row(table-row($pod.headers))
   }
-  $pod.contents.map: { $table.add-row($_) }
+  $pod.contents.map: { $table.add-row(table-row($_)) }
   pane.put: $table.gist
 }
 
