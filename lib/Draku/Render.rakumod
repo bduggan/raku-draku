@@ -37,41 +37,6 @@ sub debug-pod(\pane, $pod) is export {
   pane.put: [ %COLORS<named> => $pod.raku], :wrap<hard>;
 }
 
-#| Word-wrap colored pieces onto the pane with a fixed left indent on every
-#| line. Terminal::UI's :wrap<word> can't indent: it splits piece values with
-#| .words, so whitespace-only pieces vanish and continuation lines start at
-#| column 0. Pair keys are colors and take no display width.
-sub put-wrapped(\pane, @pieces, Int :$indent = 0, Int :$hang = 0, :%meta) is export {
-  my $width = ((pane.width // 80) - $indent - $hang) max 20;
-  my @line;
-  my $len = 0;
-  my $first = True;
-  my sub flush {
-    return unless @line;
-    # $hang: extra indent on continuation lines (eg. aligning wrapped item
-    # text under the text after its bullet)
-    pane.put: [ ' ' x ($indent + ($first ?? 0 !! $hang)), |@line ], :%meta;
-    @line = ();
-    $len = 0;
-    $first = False;
-  }
-  for @pieces -> $p {
-    my $color = $p ~~ Pair ?? $p.key !! Nil;
-    for ($p ~~ Pair ?? $p.value !! $p).Str.words -> $w {
-      flush if $len && $len + 1 + $w.chars > $width;
-      my $text = $len ?? " $w" !! $w;
-      my $prev-color = @line ?? (@line[*-1] ~~ Pair ?? @line[*-1].key !! Nil) !! Any;
-      if @line && $prev-color eqv $color {
-        @line[*-1] = $color.defined ?? ($color => @line[*-1].value ~ $text) !! (@line[*-1] ~ $text);
-      } else {
-        @line.push: $color.defined ?? ($color => $text) !! $text;
-      }
-      $len += $text.chars;
-    }
-  }
-  flush;
-}
-
 multi render(\pane, Pod::Block::Named $pod) is export {
   debug-pod(pane, $pod);
   given $pod.name {
@@ -150,7 +115,7 @@ multi render(\pane, Pod::Block::Para $pod) is export {
   debug-pod(pane, $pod);
   pane.put: "";
   my @pieces = render-glued-pieces($pod.contents);
-  put-wrapped(pane, @pieces, :indent($*pod-indent // 0), meta => %(:$pod));
+  pane.put: @pieces, :wrap<word>, :indent($*pod-indent // 0), meta => %(:$pod);
 }
 
 multi render( Pod::Block::Para $pod, Bool :$plain) is export {
@@ -191,7 +156,7 @@ multi render(\pane, Pod::Item $pod) is export {
       $_ ~~ Pair ?? $_ !! (%COLORS{"item_$level"} => $_)
     };
   }
-  put-wrapped(pane, @pieces, :indent($base), :hang($level + 2), meta => %( pod => $pod ));
+  pane.put: @pieces, :wrap<word>, :indent($base), :hang($level + 2), meta => %( pod => $pod );
   if @contents {
     my $indent = $base + 4;
     my $*pod-indent = $indent;
@@ -531,7 +496,7 @@ sub render-defn-source-body(\pane, @lines, :%meta) {
   my sub flush-para {
     return unless @para;
     pane.put: "";
-    put-wrapped(pane, inline-pod-pieces(@para.join(' ')), :indent(4 + ($*pod-indent // 0)), :%meta);
+    pane.put: inline-pod-pieces(@para.join(' ')), :wrap<word>, :indent(4 + ($*pod-indent // 0)), :%meta;
     @para = ();
   }
   my $i = 0;
@@ -577,7 +542,7 @@ multi render(\pane, Pod::Defn $pod) is export {
           if $line ~~ Pair && $line.key eq 'marker' {
             pane.put: [ '    ', %COLORS<code> => $line.value ];
           } else {
-            put-wrapped(pane, @$line, :indent(4), meta => %(:$pod));
+            pane.put: @$line, :wrap<word>, :indent(4), meta => %(:$pod);
           }
         }
       } else {

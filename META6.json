@@ -8,7 +8,7 @@
     "JSON::Fast",
     "Pod::To::Raku",
     "Color::Scheme",
-    "Terminal::UI",
+    "Terminal::UI:ver<0.1.14>",
     "git://github.com/jkramer/p6-Text-Wrap.git",
     "Pretty::Table",
     "Color::Names",
