@@ -1,0 +1,18 @@
+#!raku
+
+use Test;
+use Draku::Render;
+
+plan 2;
+
+my $defn = Pod::Defn.new(term => 'C<:nested>', config => {}, contents => [
+    Pod::Block::Para.new(config => {}, contents => []),
+    Pod::Block::Para.new(config => {}, contents => ['Nest the block within its current context.']),
+]);
+
+my $out = render($defn, :plain);
+is $out, ':nested  Nest the block within its current context.', 'defn term formatting code stripped, body rendered';
+
+is strip-formatting-codes('C<http:> and C<https:>'), 'http: and https:', 'strip-formatting-codes strips multiple codes';
+
+done-testing;
