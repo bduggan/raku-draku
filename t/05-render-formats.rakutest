@@ -1,28 +1,50 @@
 #!raku
 
+use experimental :rakuast;
 use Test;
 use Draku::Render;
 
 plan 5;
 
-# Test rendering formatting codes
-my $code-c = Pod::FormattingCode.new(type => 'C', contents => ['code']);
-my $result-c = render($code-c, :plain);
-is $result-c, 'code', 'C formatting code rendered';
+sub markup-atoms(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Markup;
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found;
+}
 
-my $code-b = Pod::FormattingCode.new(type => 'B', contents => ['bold']);
-my $result-b = render($code-b, :plain);
-is $result-b, 'bold', 'B formatting code rendered';
+my @markup = markup-atoms(q:to/END/);
+=begin pod
+C<code> B<bold> I<italic>
+=end pod
+END
 
-my $code-i = Pod::FormattingCode.new(type => 'I', contents => ['italic']);
-my $result-i = render($code-i, :plain);
-is $result-i, 'italic', 'I formatting code rendered';
+is render(@markup[0], :plain), 'code', 'C formatting code rendered';
+is render(@markup[1], :plain), 'bold', 'B formatting code rendered';
+is render(@markup[2], :plain), 'italic', 'I formatting code rendered';
 
 # Test string rendering
 my $str-result = render('plain text', :plain);
 is $str-result, 'plain text', 'plain string rendered';
 
-# Test paragraph rendering
-my $para = Pod::Block::Para.new(contents => ['test paragraph']);
-my $para-result = render($para, :plain);
-is $para-result[0], 'test paragraph', 'paragraph rendered';
+# Test paragraph rendering: no markup means it's a bare Str node, not a Paragraph
+my $ast = q:to/END/.AST;
+=begin pod
+test paragraph
+=end pod
+END
+my @blocks;
+sub walk($n) {
+  @blocks.push($n) if $n ~~ RakuAST::Doc::Block;
+  $n.visit-children: &walk;
+}
+walk($ast);
+my $plain-para = @blocks[0].paragraphs[0];
+is render($plain-para, :plain), 'test paragraph
+', 'markup-free paragraph (a bare Str) rendered';
+
+done-testing;

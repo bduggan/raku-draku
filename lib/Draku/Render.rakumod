@@ -1,111 +1,192 @@
 unit module Draku::Render;
 use experimental :rakuast;
 use Terminal::ANSI::OO 't';
-use Color::Scheme;
+use Color;
 use Pretty::Table;
 use Log::Async;
-use Cache::Dir;
 use Draku::Conf;
 
 my $*debug-pod;
-my $color = Color.new('#54DD30');
-my @palette = color-scheme( $color, 'analogous'); #six-tone-ccw');
-my $heading = Color.new('#FFFE37');
-
-
-my $cache = Cache::Dir.new: dir => $cache-dir;
+my $nest-depth = 0;
+my $heading = Color.new('#FFFE37'); # bright yellow
+my $slate   = Color.new('#6A5ACD'); # SlateBlue, base for readable blue text
+my $white   = Color.new('#FFFFFF');
 
 our %COLORS is export is default(t.white) =
-  title     => t.color('#ffff00'),
-  subtitle  => t.color('#ffff00'),
+  title     => t.color(~$heading),
+  subtitle  => t.color(~$heading),
   heading_1 => t.color(~$heading),
-  heading_2 => t.color(~($heading.darken(10))),
-  item_1    => t.color(~@palette[3]),
-  item_2    => t.color(~( @palette[3].darken(10) ) ),
-  code      => t.color(~@palette[2].lighten(30)),
-  format_C  => t.color(~@palette[2].lighten(20)),
-  format_B  => t.color(~@palette[2].lighten(20)),
-  format_I  => t.color(~@palette[2]),
-  format_X  => t.color(~@palette[2].lighten(20)),
-  text      => t.color(~@palette[3]),
-  link      => t.color( ~( @palette[4].lighten(10) ) ),
+  heading_2 => t.color(~$heading.darken(10)),
+  item_1    => t.color(~$slate.lighten(30)),
+  item_2    => t.color(~$slate.lighten(15)),
+  code      => t.color(~$white),
+  format_C  => t.color(~$white),
+  format_B  => t.color(~$heading),
+  format_I  => t.color(~$white),
+  format_X  => t.color(~$white),
+  text      => t.color(~$white),
+  link      => t.color('#C77DFF'), # bright violet, analogous to slate blue
   error     => t.color('#aabbcc'),
-  default   => t.color(~@palette[5]),
+  default   => t.color(~$white),
 ;
 sub debug-pod(\pane, $pod) is export {
   return unless $*debug-pod;
   pane.put: [ %COLORS<named> => $pod.raku], :wrap<hard>;
 }
 
-multi render(\pane, Pod::Block::Named $pod) is export {
-  debug-pod(pane, $pod);
-  my $contents = join " ", $pod.contents.map: { render($^c, :plain) }
+multi render(\pane, RakuAST::Doc::Paragraph $para) is export {
+  debug-pod(pane, $para);
   pane.put: "";
-  given $pod.name {
+  my @pieces = $para.atoms.map: { render($_) }
+  pane.put: @pieces, :wrap<word>, meta => (pod => $para);
+}
+
+multi render(RakuAST::Doc::Paragraph $para, Bool :$plain) is export {
+  $para.atoms.map: { render($_, :$plain) }
+}
+
+sub flatten-plain($x) {
+  $x ~~ Iterable ?? $x.map(&flatten-plain).join('') !! $x
+}
+
+multi render(\pane, RakuAST::Doc::Block $block) is export {
+  given $block.type {
+    when 'head' {
+      my $level = $block.level.Int;
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join("\n").trim;
+      pane.put: "";
+      pane.put: [ %COLORS{"heading_$level"} => ' ' ~ ('─' x (4 - $level)) ~ " $contents " ~ ('─' x (4 - $level)) ],
+        meta => %( pod_heading => $level, pod_content => $contents, pod_id => "$level $contents" );
+    }
+    when 'item' {
+      my $level = $block.level ?? $block.level.Int !! 1;
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join("\n").trim;
+      pane.put: [ %COLORS{"item_$level"} => ' ' ~ ('*' x $level) ~ " $contents" ];
+    }
+    when 'code' | 'output' | 'implicit-code' {
+      debug-pod(pane, $block);
+      pane.put: "--code start--" if $*debug-pod;
+      my @lines = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join.lines.grep(*.contains(/\S/));
+      pane.put: [ %COLORS<code> => $_.indent(4) ] for @lines;
+      pane.put: "--code end--" if $*debug-pod;
+    }
+    when 'pod' {
+      $block.paragraphs.map: { render(pane, $_) }
+    }
     when 'TITLE' {
+      debug-pod(pane, $block);
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      pane.put: "";
       pane.put: [ %COLORS<title> => $contents], :center
     }
     when 'SUBTITLE' {
+      debug-pod(pane, $block);
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      pane.put: "";
       pane.put: [ %COLORS<subtitle> => $contents], :center
     }
+    when 'DEFN' {
+      debug-pod(pane, $block);
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      pane.put: "";
+      pane.put: [ %COLORS<default> => $contents ], :wrap<word>;
+    }
+    when 'table' {
+      my $table = Pretty::Table.new(:!header);
+      for $block.paragraphs.grep(* ~~ RakuAST::Doc::LegacyRow) -> $row {
+        $table.add-row($row.cells.map({ flatten-plain render($_, :plain) }))
+      }
+      $table.align('l');
+      pane.put: $table.gist;
+    }
+    when 'nested' {
+      $nest-depth++;
+      LEAVE $nest-depth--;
+      render-flow(pane, $block);
+    }
     default {
-      pane.put: [ %COLORS<default> => $contents], :center
+      render-flow(pane, $block);
     }
   }
 }
 
-multi render(\pane, Pod::Block::Para $pod) is export {
-  debug-pod(pane, $pod);
-  pane.put: "";
-  my @pieces = $pod.contents.map: { render($_) }
-  pane.put: @pieces, :wrap<word>, meta => :$pod;
+sub render-flow(\pane, RakuAST::Doc::Block $block) {
+      debug-pod(pane, $block);
+      my $indent = 4 * $nest-depth;
+      my @text;
+      my sub flush {
+        return unless @text;
+        for @text.join(" ").split(/\n \s* \n/) -> $para {
+          next unless $para.contains(/\S/);
+          pane.put: "";
+          pane.put: [ %COLORS<default> => $para.subst(/\s+/, ' ', :g).trim], :wrap<word>, :$indent;
+        }
+        @text = ();
+      }
+      for $block.paragraphs -> $c {
+        if $c ~~ RakuAST::Doc::Block {
+          flush;
+          render(pane, $c);
+        } else {
+          @text.push: flatten-plain render($c, :plain);
+        }
+      }
+      flush;
 }
 
-multi render( Pod::Block::Para $pod, Bool :$plain) is export {
-  $pod.contents.map: { render($_, :$plain) }
-}
-
-multi render(\pane, Pod::Heading $pod) is export {
-  # level, contents
-  my $contents = ( $pod.contents.map: { render($^c, :plain) }).join("\n");
-  my $level = $pod.level;
-  pane.put: "";
-  pane.put: [ %COLORS{"heading_$level"} => ' ' ~ ('─' x (4 - $level)) ~ " $contents " ~ ('─' x (4 - $level)) ],
-    meta => %( pod_heading => $level, pod_content => $contents, pod_id => "$level $contents" );
-}
-
-multi render(Pod::Heading $pod, Bool :$plain) is export {
-  # level, contents
-  my $contents = ( $pod.contents.map: { render($^c, :plain) }).join("\n");
-  my $level = $pod.level;
-  my $text = ' ' ~ ('─' x (4 - $level)) ~ " $contents " ~ ('─' x (4 - $level));
-  return $text if $plain;
-  %COLORS{"heading_$level"} => $text
-}
-
-
-multi render(\pane, Pod::Item $pod) is export {
-  # level, contents
-  my $contents = ( $pod.contents.map: { render($^c, :plain) }).join("\n");
-  my $level = $pod.level;
-  pane.put: [ %COLORS{"item_$level"} => ' ' ~ ('*' x $level) ~ " $contents" ];
-}
-
-multi render(\pane, Pod::Block::Code $pod) is export {
-  debug-pod(pane, $pod);
-  pane.put: "--code start--" if $*debug-pod;
-  my $i = 1;
-  $pod.contents.map: -> $line {
-    last if $i++ == $pod.contents.elems && $line !~~ /\S/;
-    next unless $line ~~ /\S/;
-    pane.put: [ %COLORS<code> => ($_ // "").indent(4) ] for $line.?lines
-  }
-  pane.put: "--code end--" if $*debug-pod;
-}
-
-sub render-all(\pane, @pod) is export {
-  for @pod[0].contents -> $c {
-    render(pane, $c);
+multi render(RakuAST::Doc::Block $block, Bool :$plain) is export {
+  given $block.type {
+    when 'head' {
+      my $level = $block.level.Int;
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join("\n").trim;
+      my $text = ' ' ~ ('─' x (4 - $level)) ~ " $contents " ~ ('─' x (4 - $level));
+      return $text if $plain;
+      %COLORS{"heading_$level"} => $text
+    }
+    when 'item' {
+      my $level = $block.level ?? $block.level.Int !! 1;
+      my $contents = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join("\n").trim;
+      my $text = ' ' ~ ('*' x $level) ~ " $contents";
+      return $text if $plain;
+      %COLORS{"item_$level"} => $text
+    }
+    when 'code' | 'output' | 'implicit-code' {
+      my @lines = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join.lines.grep(*.contains(/\S/));
+      my $text = @lines.map({ $_.indent(4) }).join("\n");
+      return $text if $plain;
+      %COLORS<code> => $text
+    }
+    when 'pod' {
+      $block.paragraphs.map({ render($_, :plain) }).join("\n")
+    }
+    when 'TITLE' {
+      my $text = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      return $text if $plain;
+      %COLORS<title> => $text
+    }
+    when 'SUBTITLE' {
+      my $text = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      return $text if $plain;
+      %COLORS<subtitle> => $text
+    }
+    when 'DEFN' {
+      my $text = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join(" ").trim;
+      return $text if $plain;
+      %COLORS<default> => $text
+    }
+    when 'table' {
+      my $table = Pretty::Table.new(:!header);
+      for $block.paragraphs.grep(* ~~ RakuAST::Doc::LegacyRow) -> $row {
+        $table.add-row($row.cells.map({ flatten-plain render($_, :plain) }))
+      }
+      $table.align('l');
+      $table.gist
+    }
+    default {
+      my $text = $block.paragraphs.map({ flatten-plain render($_, :plain) }).join("\n").trim;
+      return $text if $plain;
+      %COLORS<default> => $text
+    }
   }
 }
 
@@ -115,49 +196,34 @@ multi render(\pane, Str $pod) is export {
 
 multi render(Str $pod, Bool :$plain) is export {
   return $pod if $plain;
-  t.white => $pod
+  %COLORS<text> => $pod
 }
 
-multi render(Pod::FormattingCode $pod, Bool :$plain) is export {
-  # type, meta
-  given $pod.type {
-    when 'C' | 'B' | 'I' | 'X' | 'R' | 'E' | 'N' {
-      return $pod.contents.map({render($_,:plain)}).join(' ') if $plain;
-      %COLORS{ "format_{ $pod.type }" } => $pod.contents.join(' ')
+multi render(RakuAST::Doc::Markup $markup, Bool :$plain) is export {
+  # letter, atoms
+  given $markup.letter {
+    when 'V' {
+      # V<> disarms nested formatting codes: show their literal source text
+      my $text = $markup.atoms.map({ $_ ~~ Str ?? $_ !! $_.Str }).join;
+      return $text if $plain;
+      %COLORS<format_V> => $text
     }
     when 'L' {
-      # also has meta
-      return $pod.contents.map({render($_, :plain )}) if $plain;
-      %COLORS<link> => $pod.contents.map({render($_, :plain )}) 
+      my @parts = $markup.atoms.map: { render($_, :plain) }
+      return @parts if $plain;
+      %COLORS<link> => @parts
     }
     default {
-      return "unknown : " ~ $pod.raku if $plain;
-      t.color('#ffaaaa') => $pod.raku
+      my @parts = $markup.atoms.map: { render($_, :plain) }
+      return @parts.join(' ') if $plain;
+      %COLORS{ "format_{ $markup.letter }" } => @parts.join(' ')
     }
   }
 }
 
-multi render(Pod::Block::Table $pod, Bool :$plain ) is export {
-  my $table = Pretty::Table.new;
-  if $pod.headers.elems > 0 {
-    $table.add-row($pod.headers)
-  }
-  $pod.contents.map: { $table.add-row($_) }
-  $table.gist
-}
-
-multi render(\pane, Pod::Block::Table $pod, Bool :$plain ) is export {
-  my $table = Pretty::Table.new;
-  if $pod.headers.elems > 0 {
-    $table.add-row($pod.headers)
-  }
-  $pod.contents.map: { $table.add-row($_) }
-  pane.put: $table.gist
-}
-
-multi render(\pane, Pod::FormattingCode $pod) is export {
-  debug-pod(pane, $pod);
-  pane.put: render($pod);
+multi render(\pane, RakuAST::Doc::Markup $markup) is export {
+  debug-pod(pane, $markup);
+  pane.put: render($markup);
 }
 
 multi render(\pane, $pod) is export {
@@ -178,22 +244,20 @@ sub doc-blocks($node, @found) {
 }
 
 sub extract-pod(IO::Path $file) is export {
-  $cache.get-cached: $file, {
-    debug "extracting pod from $file";
-    my $pod;
-    try {
-      my @found;
-      doc-blocks($file.slurp.AST, @found);
-      $pod = @found.map(*.podify).Array;
-      CATCH {
-        default {
-          debug "error evaluating pod: $_";
-          fail "error evaluating pod: $_";
-        }
+  debug "extracting pod from $file";
+  my $pod;
+  try {
+    my @found;
+    doc-blocks($file.slurp.AST, @found);
+    $pod = @found;
+    CATCH {
+      default {
+        debug "error evaluating pod: $_";
+        fail "error evaluating pod: $_";
       }
     }
-    $pod;
   }
+  $pod;
 }
 
 sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DRAKU_DEBUG>) is export {
@@ -215,9 +279,10 @@ sub render-file(\pane, IO::Path $file, Bool :$debug = so %*ENV<DRAKU_DEBUG>) is 
     }
     return;
   }
-  for $pod[0].contents -> $c {
+  for $pod[0].paragraphs -> $c {
     if $debug {
-      pane.put: [ $c.^name.fmt('%20s'), '  ', t.color('#777777') => (~render($c.contents[0],:plain)).raku ], meta => %( pod => $c );
+      my $label = $c ~~ RakuAST::Doc::Block ?? $c.type !! $c.^name;
+      pane.put: [ $label.fmt('%20s'), '  ', t.color('#777777') => (~render($c,:plain)).raku ], meta => %( pod => $c );
     } else {
       #$*debug-pod = True;
       render(pane, $c);

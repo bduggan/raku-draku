@@ -10,8 +10,7 @@
     "Terminal::UI",
     "git://github.com/jkramer/p6-Text-Wrap.git",
     "Pretty::Table",
-    "Color::Names",
-    "Cache::Dir"
+    "Color::Names"
   ],
   "description" : "A documentation browser for Raku",
   "license" : "MIT",

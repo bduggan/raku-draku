@@ -1,0 +1,39 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 3;
+
+sub head-blocks(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq 'head';
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found;
+}
+
+my @h = head-blocks(q:to/END/);
+=begin pod
+=head1 First Level
+
+=head2 Second Level
+=end pod
+END
+
+is render(@h[0], :plain), ' ─── First Level ───', 'head1 renders with level-appropriate bar';
+is render(@h[1], :plain), ' ── Second Level ──', 'head2 renders with a shorter bar';
+
+my @h-markup = head-blocks(q:to/END/);
+=begin pod
+=head1 Heading with C<code>
+=end pod
+END
+
+is render(@h-markup[0], :plain), ' ─── Heading with code ───', 'heading with inline formatting renders text only';
+
+done-testing;

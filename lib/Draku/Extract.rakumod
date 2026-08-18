@@ -1,13 +1,14 @@
 unit module Draku::Extract;
+use experimental :rakuast;
 use Draku::Render;
 
-multi links(Pod::Block::Para $pod) is export {
-  $pod.contents.map: { |links($_) }
+multi links(RakuAST::Doc::Paragraph $para) is export {
+  $para.atoms.map: { |links($_) }
 }
 
-multi links(Pod::FormattingCode $pod) is export {
-  return Empty unless $pod.type eq 'L';
-  return ( { name => ~render($pod, :plain), target => $pod.meta }, )
+multi links(RakuAST::Doc::Markup $markup) is export {
+  return Empty unless $markup.letter eq 'L';
+  return ( { name => ~render($markup, :plain), target => $markup.meta[0] }, )
 }
 
 multi links($pod) is export {

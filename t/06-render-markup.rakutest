@@ -1,0 +1,49 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 8;
+
+sub markup-atoms(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Markup;
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found;
+}
+
+my $pod = q:to/END/;
+=begin pod
+C<code> B<bold> I<italic> X<indexed> L<a link|https://example.com>
+=end pod
+END
+
+my (@markup) = markup-atoms($pod);
+
+is render(@markup[0], :plain), 'code', 'C formatting code rendered';
+is render(@markup[1], :plain), 'bold', 'B formatting code rendered';
+is render(@markup[2], :plain), 'italic', 'I formatting code rendered';
+is render(@markup[3], :plain), 'indexed', 'X formatting code rendered';
+is render(@markup[4], :plain).join(','), 'a link', 'L formatting code rendered as list';
+
+my $nested = markup-atoms(q:to/END/).first;
+=begin pod
+C<B<bold inside code>>
+=end pod
+END
+is render($nested, :plain), 'bold inside code', 'nested formatting code rendered';
+
+my $rare = markup-atoms(q:to/END/);
+=begin pod
+D<term> Z<hidden> K<Enter>
+=end pod
+END
+is render($rare[0], :plain), 'term', 'D (definition) formatting code rendered, not just enumerated letters';
+is render($rare[1], :plain), 'hidden', 'Z (zero-width) formatting code rendered';
+
+done-testing;

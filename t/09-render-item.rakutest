@@ -1,0 +1,38 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 3;
+
+sub item-blocks(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq 'item';
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found;
+}
+
+my @i = item-blocks(q:to/END/);
+=begin pod
+=item one
+=item2 nested one
+=end pod
+END
+
+is render(@i[0], :plain), ' * one', 'level-1 item (implicit level) renders with a single bullet';
+is render(@i[1], :plain), ' ** nested one', 'level-2 item renders with two bullets';
+
+my @i-markup = item-blocks(q:to/END/);
+=begin pod
+=item has C<code> in it
+=end pod
+END
+
+is render(@i-markup[0], :plain), ' * has code in it', 'item with inline formatting renders text only';
+
+done-testing;
