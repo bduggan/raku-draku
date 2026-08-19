@@ -1,0 +1,43 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 2;
+
+sub code-blocks(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq 'code';
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found;
+}
+
+my @c = code-blocks(q:to/END/);
+=begin pod
+=begin code
+my $x = 1;
+my $y = 2;
+=end code
+=end pod
+END
+
+is render(@c[0], :plain), "    my \$x = 1;\n    my \$y = 2;", 'code block lines are indented 4 spaces';
+
+my @c-blank = code-blocks(q:to/END/);
+=begin pod
+=begin code
+my $x = 1;
+
+my $y = 2;
+=end code
+=end pod
+END
+
+is render(@c-blank[0], :plain), "    my \$x = 1;\n    my \$y = 2;", 'blank lines inside a code block are dropped (matches current behavior)';
+
+done-testing;

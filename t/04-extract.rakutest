@@ -1,18 +1,31 @@
 #!raku
 
+use experimental :rakuast;
 use Test;
 use Draku::Extract;
 
 plan 3;
 
-# Test links extraction from Pod::FormattingCode with type 'L'
-my $link-pod = Pod::FormattingCode.new(
-  type => 'L',
-  meta => 'https://raku.org',
-  contents => ['Raku Website']
-);
+sub top-paragraph(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Paragraph;
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found[0];
+}
 
-my @links = links($link-pod);
-is @links.elems, 1, 'extracted one link';
-is @links[0]<name>, 'Raku Website', 'link name is correct';
-is @links[0]<target>, 'https://raku.org', 'link target is correct';
+my $para = top-paragraph(q:to/END/);
+=begin pod
+See L<Raku Website|https://raku.org> for more.
+=end pod
+END
+
+my @found-links = links($para);
+is @found-links.elems, 1, 'extracted one link';
+is @found-links[0]<name>, 'Raku Website', 'link name is correct';
+is @found-links[0]<target>, 'https://raku.org', 'link target is correct';
+
+done-testing;

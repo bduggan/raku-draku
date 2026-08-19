@@ -1,0 +1,42 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 2;
+
+sub flatten($rendered) {
+  $rendered.map({ $_ ~~ Positional ?? .join !! $_ }).join;
+}
+
+sub top-paragraph(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Paragraph;
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found[0];
+}
+
+my $para = top-paragraph(q:to/END/);
+=begin pod
+Some C<code> and B<bold> text.
+=end pod
+END
+
+is flatten(render($para, :plain)), 'Some code and bold text.
+', 'paragraph with mixed text and formatting renders in order';
+
+my $link-para = top-paragraph(q:to/END/);
+=begin pod
+See L<the docs|https://example.com> for more.
+=end pod
+END
+
+is flatten(render($link-para, :plain)), 'See the docs for more.
+', 'paragraph with a link atom renders in order';
+
+done-testing;

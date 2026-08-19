@@ -1,24 +1,26 @@
 #!raku
 
+use experimental :rakuast;
 use Draku::Render;
 use Test;
 
-my $h = Pod::Heading.new(level => 3, config => {}, contents => [
-    Pod::Block::Para.new(config => {}, contents => [
-       Pod::FormattingCode.new(type => "X", meta => [
-          [ "regex", "\\h"],
-          [ "regex", "\\H"]
-        ], config => {}, contents => [
-          Pod::FormattingCode.new(type => "C", meta => [], config => {}, contents => [ "\\h"]),
-          " and ",
-          Pod::FormattingCode.new(type => "C", meta => [], config => {}, contents => [ "\\H"])
-      ])
-  ])
-]);
+plan 1;
 
-my $out = render($h, :plain);
+my $ast = q:to/END/.AST;
+=begin pod
+=head3 X<C<\h> and C<\H>>
+=end pod
+END
 
-is $out, ' ─ \\h  and  \\H ─', 'nested heading, para, formatting code';
+my @found;
+sub walk($n) {
+  @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq 'head';
+  $n.visit-children: &walk;
+}
+walk($ast);
+
+my $out = render(@found[0], :plain);
+
+is $out, ' ─ \h  and  \H ─', 'nested heading, para, formatting code';
 
 done-testing;
-
