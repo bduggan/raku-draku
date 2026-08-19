@@ -1,3 +1,6 @@
+0.0.4 2026-08-19
+  - fix meta and test
+
 0.0.3 2026-08-16
   - bump ci version
   - fetch modules from ecosystems
