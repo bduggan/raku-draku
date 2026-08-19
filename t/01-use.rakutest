@@ -1,7 +1,7 @@
 #!raku
 
 use Test;
-plan 6;
+plan 7;
 
 use-ok 'Draku';
 use-ok 'Draku::Render';
@@ -9,3 +9,4 @@ use-ok 'Draku::UI';
 use-ok 'Draku::Search';
 use-ok 'Draku::Conf';
 use-ok 'Draku::Extract';
+use-ok 'Draku::Fetch';
