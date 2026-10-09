@@ -6,7 +6,6 @@
   "build-depends" : [ ],
   "depends" : [
     "JSON::Fast",
-    "Pod::To::Raku",
     "Color::Scheme",
     "Terminal::UI",
     "git://github.com/jkramer/p6-Text-Wrap.git",

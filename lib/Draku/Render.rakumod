@@ -1,4 +1,5 @@
 unit module Draku::Render;
+use experimental :rakuast;
 use Terminal::ANSI::OO 't';
 use Color::Scheme;
 use Pretty::Table;
@@ -168,15 +169,22 @@ multi render($pod, Bool :$plain) is export {
   t.color('#ff0000') => $pod.raku;
 }
 
+sub doc-blocks($node, @found) {
+  if $node ~~ RakuAST::Doc::Block {
+    @found.push: $node;
+  } else {
+    $node.visit-children: -> $child { doc-blocks($child, @found) };
+  }
+}
+
 sub extract-pod(IO::Path $file) is export {
   $cache.get-cached: $file, {
-    my $tmp = $pod-tmp;
     debug "extracting pod from $file";
-    shell "raku --doc=Raku $file > $tmp";
-    my $in = $tmp.IO.slurp;
     my $pod;
     try {
-      $pod = $in.EVAL;
+      my @found;
+      doc-blocks($file.slurp.AST, @found);
+      $pod = @found.map(*.podify).Array;
       CATCH {
         default {
           debug "error evaluating pod: $_";
