@@ -1,0 +1,46 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 4;
+
+sub table-block(Str $src) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq 'table';
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found[0];
+}
+
+my $t = table-block(q:to/END/);
+=begin pod
+=begin table
+Col A | Col B
+------+------
+1     | 2
+3     | 4
+=end table
+=end pod
+END
+
+my $gist = render($t, :plain);
+like $gist, /'Col A'/, 'header row text is present';
+like $gist, /'3'/, 'body row cells are present';
+like $gist, /'4'/, 'body row cells are present';
+
+my $t-markup = table-block(q:to/END/);
+=begin pod
+=for table :nested
+Value is...       Specify with...
+Boolean (true)    C<:key>
+=end pod
+END
+
+lives-ok { render($t-markup, :plain) }, 'table cell containing a formatting code does not throw';
+
+done-testing;

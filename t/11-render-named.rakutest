@@ -1,0 +1,71 @@
+#!raku
+
+use experimental :rakuast;
+use Test;
+use Draku::Render;
+
+plan 5;
+
+class MockPane {
+  has @.lines;
+  method put($content, :$wrap, :$center, :$meta, :$scroll-ok) { @!lines.push: $content }
+  method clear { @!lines = () }
+}
+
+sub named-block(Str $src, Str $type) {
+  my $ast = $src.AST;
+  my @found;
+  sub walk($n) {
+    @found.push($n) if $n ~~ RakuAST::Doc::Block && $n.type eq $type;
+    $n.visit-children: &walk;
+  }
+  walk($ast);
+  @found[0];
+}
+
+my $title = named-block(q:to/END/, 'TITLE');
+=begin pod
+=TITLE My Module
+=end pod
+END
+is render($title, :plain), 'My Module', 'TITLE renders as plain text';
+
+my $subtitle = named-block(q:to/END/, 'SUBTITLE');
+=begin pod
+=SUBTITLE a short description
+=end pod
+END
+is render($subtitle, :plain), 'a short description', 'SUBTITLE renders as plain text';
+
+my $defn = named-block(q:to/END/, 'DEFN');
+=begin pod
+=DEFN term with C<code>
+body here
+=end pod
+END
+is render($defn, :plain), "term with code\nbody here", 'DEFN renders term and body together, unstyled';
+
+my $note = named-block(q:to/END/, 'NOTE');
+=begin pod
+=begin NOTE
+some note text
+=end NOTE
+=end pod
+END
+is render($note, :plain), 'some note text', 'unrecognized named block falls through to default rendering';
+
+my $version = named-block(q:to/END/, 'VERSION');
+=begin pod
+=begin VERSION
+    =table
+        Maintainer:     Damian Conway
+        Date:           9 Apr 2005
+=end VERSION
+=end pod
+END
+my $pane = MockPane.new;
+render($pane, $version);
+ok $pane.lines.first({ $_ ~~ Str && $_.contains('+---') }),
+  'a table nested inside a named block gets its own pane.put line, not centered/mangled with surrounding text';
+
+done-testing;

@@ -17,7 +17,12 @@ jobs:
         raku-version:
           - '2026.06'
           - 'latest'
+        rakuast:
+          - ''
+          - '1'
     runs-on: ${{ matrix.os }}
+    env:
+      RAKUDO_RAKUAST: ${{ matrix.rakuast }}
     steps:
       - uses: actions/checkout@v3
       - uses: Raku/setup-raku@v1
