@@ -60,6 +60,29 @@ multi MAIN('search', Str $term, Bool :$debug, Bool :$all, Int :$max = 1000) {
   ui.shutdown;
 }
 
+multi MAIN(Str :$f! #= find a routine, method or sub by name, e.g. draku -f trans
+          ) {
+  my $*core-docs = core-docs(:!update);
+  my @results = search-routine($f);
+  exit note "No routine or method '$f' found in the documentation" unless @results > 0;
+  setup;
+
+  my $found = @results[0]<file>;
+  render-file(top, $found);
+  jump-to-term(top, @results[0]<line>, @results[0]<text>);
+
+  for @results {
+    btm.put: [
+      t.color(brightturquoise) => .<file>.basename.fmt('%-25s '),
+      t.color(lilac)           => .<kind>.fmt('%-10s '),
+      t.color(carolinablue)    => .<line>.fmt('%4d '),
+      t.white                  => .<text>,
+    ], meta => %$_;
+  }
+  ui.interact;
+  ui.shutdown;
+}
+
 multi MAIN($module) {
   my @found;
   my @repos = $*REPO.repo-chain.grep(CompUnit::Repository::Installation);

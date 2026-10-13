@@ -75,8 +75,10 @@ sub browse-docs(\pane, :%meta) is export {
 sub find($str) {
   # e.g. /type/IO::Path::QNX  -> $filename
   my @parts = $str.split(/ '::' | '/'/);
-  my $found = $*core-docs.child(@parts.join('/') ~ '.pod6' );
-  return $found if $found.e;
+  for '.rakudoc', '.pod6' -> $ext {
+    my $found = $*core-docs.child(@parts.join('/') ~ $ext);
+    return $found if $found.e;
+  }
   return Nil;
 }
 
